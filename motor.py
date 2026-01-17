@@ -15,11 +15,10 @@ class MotorAnalise:
 
     def analisar(self, df):
         if len(df) < 10: return None
-        
-        # Preenchimento de dados faltantes (comum na B3)
         df['close'] = df['close'].ffill()
         
-        df['ma252'] = df['close'].rolling(window=min(len(df), self.p_longo)).mean()
+        # Cálculos principais
+        ma252_serie = df['close'].rolling(window=min(len(df), self.p_longo)).mean()
         df['rsi_14'] = self.calcular_rsi(df['close'], self.p_curto)
         df['rsi_252'] = self.calcular_rsi(df['close'], self.p_longo)
         
@@ -29,17 +28,17 @@ class MotorAnalise:
         
         diff = resistencia_anual - suporte_anual
         fib = {
-            "61.8% (Ouro)": round(resistencia_anual - (0.382 * diff), 2),
-            "50.0% (Meio)": round(resistencia_anual - (0.5 * diff), 2),
-            "38.2% (Retr)": round(resistencia_anual - (0.618 * diff), 2)
+            "61.8%": round(resistencia_anual - (0.382 * diff), 2),
+            "50.0%": round(resistencia_anual - (0.5 * diff), 2),
+            "38.2%": round(resistencia_anual - (0.618 * diff), 2)
         }
 
         return {
             "preco": round(preco_atual, 2),
             "rsi_14": round(df['rsi_14'].fillna(50).iloc[-1], 2),
             "rsi_252": round(df['rsi_252'].fillna(50).iloc[-1], 2),
-            "ma252": round(df['ma252'].fillna(preco_atual).iloc[-1], 2),
-            "tendencia": "ALTA" if preco_atual > df['ma252'].iloc[-1] else "BAIXA",
+            "ma252": round(ma252_serie.iloc[-1], 2),
+            "tendencia": "ALTA" if preco_atual > ma252_serie.iloc[-1] else "BAIXA",
             "suporte": round(suporte_anual, 2),
             "resistencia": round(resistencia_anual, 2),
             "stop_loss": round(preco_atual * 0.97, 2),
