@@ -10,9 +10,9 @@ from email.mime.text import MIMEText
 # ======================================================
 # 1. CONFIGURAÇÕES INICIAIS
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 2.0", layout="wide")
 
-# Tenta ler os segredos. Se não achar (ainda não configurou), usa vazio para não travar.
+# Tenta ler os segredos. Se não achar, usa vazio.
 try:
     TELEGRAM_TOKEN = st.secrets["telegram"]["token"]
     TELEGRAM_CHAT_ID = st.secrets["telegram"]["chat_id"]
@@ -61,8 +61,8 @@ class MotorAnalise:
             p_graham = (22.5 * lpa * vpa) ** 0.5 if (lpa > 0 and vpa > 0) else 0
             p_gordon = p_bazin # Proxy
 
-            # Níveis Técnicos (Suporte/Resistência/Stops)
-            window = 60 # 3 meses aprox
+            # Níveis Técnicos
+            window = 60 
             suporte = hist["Close"].tail(window).min()
             resistencia = hist["Close"].tail(window).max()
             stop_loss = suporte * 0.95
@@ -141,7 +141,6 @@ def disparar_alerta(titulo, corpo):
     enviar_telegram(msg)
     enviar_email(msg)
 
-# --- CORREÇÃO DO ERRO DE CACHE (UnserializableReturnValueError) ---
 @st.cache_data(ttl=3600)
 def obter_dados(ticker):
     try:
@@ -151,8 +150,6 @@ def obter_dados(ticker):
         
         motor = MotorAnalise()
         r = motor.analisar(hist, t.info, ticker)
-        
-        # RETORNA APENAS DADOS PUROS (Dicionário), NÃO O OBJETO TICKER
         return r, t.info 
     except:
         return None, None
@@ -234,7 +231,7 @@ with tabs[0]:
     
     if r:
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Preço", f"R$ {r['preco']:.2f}")
+        c1.metric("Preço Atual", f"R$ {r['preco']:.2f}")
         c2.metric("Bazin (Teto)", f"R$ {r['p_bazin']:.2f}", delta=f"{r['p_bazin']-r['preco']:.2f}")
         c3.metric("Graham (Justo)", f"R$ {r['p_graham']:.2f}")
         c4.metric("Gordon (Est.)", f"R$ {r['p_gordon']:.2f}")
@@ -245,7 +242,6 @@ with tabs[0]:
         c7.metric("Drawdown", f"{r['drawdown']:.1f}%", delta_color="inverse")
         c8.metric("DY Anual", f"{r['dy']*100:.2f}%")
 
-        # GRÁFICO TÉCNICO COMPLETO
         try:
             hist_chart = yf.download(ticker_input, period="2y", progress=False)
             if not hist_chart.empty:
@@ -257,12 +253,11 @@ with tabs[0]:
                 if r['stop_gain'] > 0: fig.add_hline(y=r['stop_gain'], line_dash="dash", line_color="gold", annotation_text="ALVO")
                 if r['stop_loss'] > 0: fig.add_hline(y=r['stop_loss'], line_dash="dash", line_color="red", annotation_text="STOP")
                 if r['suporte'] > 0: fig.add_hline(y=r['suporte'], line_dash="dot", line_color="green", annotation_text="SUPORTE")
-                if r['p_bazin'] > 0: fig.add_hline(y=r['p_bazin'], line_dash="dash", line_color="purple", annotation_text="BAZIN")
                 
                 st.plotly_chart(fig, use_container_width=True)
-                        except Exception as e: st.warning(f"Gráfico indisponível: {e}")
+        except Exception as e:
+            st.warning(f"Gráfico indisponível: {e}")
         
-        # TABELA VALUATION
         st.subheader("📋 Valuation Consolidado")
         dados_tabela = {
             "Métrica": ["DY (%)", "P/L", "P/VP", "ROE (%)", "Preço Bazin", "Preço Graham", "Preço Gordon"],
