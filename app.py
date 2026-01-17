@@ -23,7 +23,6 @@ if ticker:
             df_p = df.reset_index()
             df_p.columns = [str(c).lower() for c in df_p.columns]
             
-            # Passa info para o motor
             res = motor.analisar(df_p, t_obj.info)
             
             if res:
@@ -32,7 +31,7 @@ if ticker:
                 c_map = {"green": "#00CC96", "red": "#FF4B4B", "blue": "#1F77B4", "yellow": "#FFA500", "gray": "#808080"}
                 st.markdown(f"<h2 style='text-align: center; color:{c_map.get(res['cor_sinal'], '#FFF')};'>🎯 Veredito: {res['recomendacao']}</h2>", unsafe_allow_html=True)
 
-                # 2. VALUATIONS E PREÇOS (5 COLUNAS)
+                # 2. VALUATIONS E PREÇOS NO TOPO
                 st.subheader("💎 Valuation e Comparativo de Preço")
                 v1, v2, v3, v4, v5 = st.columns(5)
                 v1.metric("Graham", f"R$ {res['val_graham']}")
@@ -41,18 +40,23 @@ if ticker:
                 v4.metric("PREÇO TETO", f"R$ {res['preco_teto']}", delta=f"{res['upside']}%")
                 v5.metric("PREÇO ATUAL", f"R$ {res['preco']}", delta_color="off")
 
-                # 3. GRÁFICO OPERACIONAL
+                # 3. MÉTRICAS AUXILIARES (RSI VOLTOU AQUI)
                 st.markdown("---")
+                m1, m2, m3 = st.columns(3)
+                m1.metric("RSI (Índice de Força)", res['rsi_14'], help="Abaixo de 30: Sobrevendido (Compra). Acima de 70: Sobrecomprado (Venda).")
+                m2.metric("Tendência Macro", res['tendencia'])
+                m3.metric("Média 252p", f"R$ {res['ma252']}")
+
+                # 4. GRÁFICO OPERACIONAL
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=df_p['date'], y=df_p['close'], name="Preço", line=dict(color='#00f2ff', width=2)))
                 fig.add_hline(y=res['stop_loss'], line_color="red", line_dash="dash", annotation_text="STOP LOSS")
                 fig.add_hline(y=res['stop_gain'], line_color="green", line_dash="dash", annotation_text="STOP GAIN")
-                fig.add_hline(y=res['ma252'], line_color="orange", line_dash="dot", annotation_text="MÉDIA 252")
                 
                 fig.update_layout(template="plotly_dark", height=500, margin=dict(l=0,r=0,b=0,t=20), hovermode="x unified")
                 st.plotly_chart(fig, use_container_width=True)
 
-                # 4. TABELAS DE PARÂMETROS
+                # 5. TABELAS DE PARÂMETROS
                 st.markdown("---")
                 col1, col2, col3 = st.columns(3)
                 with col1:

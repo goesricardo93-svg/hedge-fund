@@ -34,14 +34,16 @@ class MotorAnalise:
         preco_teto = np.mean(vals) if vals else preco_atual
         upside_perc = ((preco_teto / preco_atual) - 1) * 100
 
-        # --- RECOMENDAÇÃO ---
+        # --- RECOMENDAÇÃO (Filtro RSI) ---
         tendencia = "ALTA" if preco_atual > ma252 else "BAIXA"
-        if preco_atual < preco_teto and preco_atual > (ma252 * 0.95):
+        if preco_atual < preco_teto and rsi14 < 40:
+            rec, cor = "COMPRA FORTE (Oportunidade Rara)", "green"
+        elif preco_atual < preco_teto:
             rec, cor = "COMPRA (Abaixo do Teto)", "green"
-        elif preco_atual > preco_teto:
-            rec, cor = "AGUARDAR (Acima do Teto)", "yellow"
+        elif rsi14 > 70:
+            rec, cor = "VENDA/ALERTA (Sobrecomprado)", "red"
         else:
-            rec, cor = "FORA (Tendência de Baixa)", "gray"
+            rec, cor = "AGUARDAR/MANTER", "blue"
 
         max_252 = float(df['close'].tail(252).max())
         min_252 = float(df['close'].tail(252).min())
