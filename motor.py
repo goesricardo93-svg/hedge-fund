@@ -1,62 +1,59 @@
-import streamlit as st
-import yfinance as yf
 import pandas as pd
-from motor import MotorAnalise
+import numpy as np
 
-st.set_page_config(page_title="Hedge Fund Dashboard", layout="wide")
-st.title("🏛️ Terminal Hedge Fund - Inteligência 252p")
+class MotorAnalise:
+    def __init__(self):
+        self.p_curto = 14
+        self.p_longo = 252
 
-motor = MotorAnalise()
+    def calcular_rsi(self, serie, window):
+        try:
+            delta = serie.diff()
+            ganho = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+            perda = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+            rs = ganho / perda
+            return 100 - (100 / (1 + rs))
+        except:
+            return pd.Series(50, index=serie.index)
 
-# --- INPUT DE TICKER ---
-ticker = st.text_input("Consultar Ativo:", value="BTC-USD").upper().strip()
+    def analisar(self, df):
+        # Proteção contra dados insuficientes
+        if len(df) < 10: return None
+        
+        # Cálculos Base
+        df['ma252'] = df['close'].rolling(window=min(len(df), self.p_longo)).mean()
+        df['rsi_14'] = self.calcular_rsi(df['close'], self.p_curto)
+        df['rsi_252'] = self.calcular_rsi(df['close'], self.p_longo)
+        
+        preco_atual = df['close'].iloc[-1]
+        
+        # Suporte e Resistência (com proteção de erro)
+        resistencia_anual = df['close'].tail(self.p_longo).max()
+        suporte_anual = df['close'].tail(self.p_longo).min()
+        
+        # Fibonacci
+        diff = resistencia_anual - suporte_anual
+        fib = {}
+        if diff > 0:
+            fib = {
+                "61.8%": round(resistencia_anual - (0.382 * diff), 2),
+                "50.0%": round(resistencia_anual - (0.5 * diff), 2),
+                "38.2%": round(resistencia_anual - (0.618 * diff), 2)
+            }
 
-if ticker:
-    try:
-        df_ind = yf.download(ticker, period="4y", progress=False)
-        if not df_ind.empty:
-            # Padronização de Colunas
-            if isinstance(df_ind.columns, pd.MultiIndex): df_ind.columns = df_ind.columns.get_level_values(0)
-            df_ind.columns = [str(col).lower() for col in df_ind.columns]
-            df_proc = df_ind.reset_index()
-            df_proc.columns = [str(col).lower() for col in df_proc.columns]
+        return {
+            "preco": round(preco_atual, 2),
+            "rsi_14": round(df['rsi_14'].fillna(50).iloc[-1], 2),
+            "rsi_252": round(df['rsi_252'].fillna(50).iloc[-1], 2),
+            "ma252": round(df['ma252'].fillna(preco_atual).iloc[-1], 2),
+            "tendencia": "ALTA" if preco_atual > df['ma252'].iloc[-1] else "BAIXA",
+            "suporte": round(suporte_anual, 2),
+            "resistencia": round(resistencia_anual, 2),
+            "stop_loss": round(preco_atual * 0.97, 2),
+            "stop_gain": round(preco_atual * 1.06, 2),
+            "fibonacci": fib
+        }
 
-            res = motor.analisar(df_proc)
-            
-            # --- BLOCO 1: MÉTRICAS DE FORÇA (RSI E TENDÊNCIA) ---
-            st.markdown(f"### 📈 Análise de Momentum: {ticker}")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Preço Atual", f"$ {res['preco']:,.2f}")
-            c2.metric("Tendência (252p)", res['tendencia'])
-            c3.metric("RSI Tático (14p)", res['rsi_14'])
-            c4.metric("RSI Macro (252p)", res['rsi_252'])
-
-            st.markdown("---")
-
-            # --- BLOCO 2: SUPORTE, RESISTÊNCIA E RISCO ---
-            col_risk, col_sr, col_fib = st.columns(3)
-
-            with col_risk:
-                st.subheader("🛡️ Gestão de Risco")
-                st.error(f"STOP LOSS: $ {res['stop_loss']:,.2f}")
-                st.success(f"STOP GAIN: $ {res['stop_gain']:,.2f}")
-                st.info(f"MÉDIA ANUAL: $ {res['ma252']:,.2f}")
-
-            with col_sr:
-                st.subheader("🚧 Barreiras de Preço")
-                st.warning(f"RESISTÊNCIA (Topo): $ {res['resistencia']:,.2f}")
-                st.write(f"**SUPORTE (Fundo):** $ {res['suporte']:,.2f}")
-
-            with col_fib:
-                st.subheader("📐 Fibonacci (252p)")
-                for n, v in res['fibonacci'].items():
-                    st.write(f"**{n}:** $ {v:,.2f}")
-
-            # --- BLOCO 3: GRÁFICO ---
-            st.markdown("---")
-            st.write("### Gráfico de Preço e Média Anual")
-            df_vis = motor.processar_df(df_proc).set_index('date')
-            st.line_chart(df_vis[['close', 'ma252']])
-            
-    except Exception as e:
-        st.error(f"Erro na análise: {e}")
+    def processar_df(self, df):
+        df['ma252'] = df['close'].rolling(window=min(len(df), self.p_longo)).mean()
+        return df

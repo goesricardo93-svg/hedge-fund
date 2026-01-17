@@ -1,53 +1,69 @@
+import streamlit as st
+import yfinance as yf
 import pandas as pd
-import numpy as np
+from motor import MotorAnalise
 
-class MotorAnalise:
-    def __init__(self):
-        self.p_curto = 14
-        self.p_longo = 252
+st.set_page_config(page_title="Terminal Hedge Fund", layout="wide")
+st.title("🏛️ Terminal Hedge Fund - Inteligência Total")
 
-    def calcular_rsi(self, serie, window):
-        delta = serie.diff()
-        ganho = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-        perda = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-        rs = ganho / perda
-        return 100 - (100 / (1 + rs))
+motor = MotorAnalise()
 
-    def analisar(self, df):
-        # Processamento Base
-        df['ma20'] = df['close'].rolling(window=20).mean()
-        df['ma252'] = df['close'].rolling(window=self.p_longo).mean()
-        df['rsi_14'] = self.calcular_rsi(df['close'], self.p_curto)
-        df['rsi_252'] = self.calcular_rsi(df['close'], self.p_longo)
-        
-        preco_atual = df['close'].iloc[-1]
-        
-        # SUPORTE E RESISTÊNCIA (Máximas e Mínimas do Ciclo de 1 Ano)
-        resistencia_anual = df['close'].tail(self.p_longo).max()
-        suporte_anual = df['close'].tail(self.p_longo).min()
-        
-        # FIBONACCI (Baseado no Suporte e Resistência Anual)
-        diff = resistencia_anual - suporte_anual
-        fib = {
-            "61.8% (Ouro)": round(resistencia_anual - (0.382 * diff), 2),
-            "50.0% (Equilíbrio)": round(resistencia_anual - (0.5 * diff), 2),
-            "38.2% (Retração)": round(resistencia_anual - (0.618 * diff), 2)
-        }
+# --- SEÇÃO 1: WATCHLIST (PAINEL GERAL) ---
+with st.expander("📊 Monitor Global (Watchlist)", expanded=False):
+    watchlist = ["BTC-USD", "ETH-USD", "PETR4.SA", "VALE3.SA", "AAPL", "TSLA"]
+    if st.button("Atualizar Monitor"):
+        dados_monitor = []
+        for t in watchlist:
+            d = yf.download(t, period="3y", progress=False)
+            if not d.empty:
+                d.columns = [str(c).lower() for c in (d.columns.get_level_values(0) if isinstance(d.columns, pd.MultiIndex) else d.columns)]
+                res = motor.analisar(d.reset_index())
+                if res:
+                    dados_monitor.append({"Ativo": t, "Preço": res['preco'], "Tendência": res['tendencia'], "RSI 252p": res['rsi_252']})
+        st.table(pd.DataFrame(dados_monitor))
 
-        return {
-            "preco": round(preco_atual, 2),
-            "rsi_14": round(df['rsi_14'].iloc[-1], 2),
-            "rsi_252": round(df['rsi_252'].iloc[-1], 2),
-            "ma252": round(df['ma252'].iloc[-1], 2),
-            "tendencia": "ALTA" if preco_atual > df['ma252'].iloc[-1] else "BAIXA",
-            "suporte": round(suporte_anual, 2),
-            "resistencia": round(resistencia_anual, 2),
-            "stop_loss": round(preco_atual * 0.97, 2),
-            "stop_gain": round(preco_atual * 1.06, 2),
-            "fibonacci": fib
-        }
+# --- SEÇÃO 2: BUSCA INDIVIDUAL ---
+st.subheader("🔍 Consulta Detalhada")
+ticker = st.text_input("Digite o Ticker (ex: NVDA):", value="BTC-USD").upper().strip()
 
-    def processar_df(self, df):
-        # Função auxiliar para o gráfico não quebrar
-        df['ma252'] = df['close'].rolling(window=self.p_longo).mean()
-        return df
+if ticker:
+    try:
+        df_raw = yf.download(ticker, period="4y", progress=False)
+        if not df_raw.empty:
+            # Limpeza de colunas MultiIndex do yfinance novo
+            df_raw.columns = [str(c).lower() for c in (df_raw.columns.get_level_values(0) if isinstance(df_raw.columns, pd.MultiIndex) else df_raw.columns)]
+            df_proc = df_raw.reset_index()
+            
+            res = motor.analisar(df_proc)
+            
+            if res:
+                # Layout de colunas
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Preço", f"$ {res['preco']:,.2f}")
+                c2.metric("Tendência", res['tendencia'])
+                c3.metric("RSI 14p", res['rsi_14'])
+                c4.metric("RSI 252p", res['rsi_252'])
+
+                st.markdown("---")
+                col_a, col_b, col_c = st.columns(3)
+                
+                with col_a:
+                    st.subheader("🛡️ Risco")
+                    st.error(f"STOP LOSS: {res['stop_loss']}")
+                    st.success(f"STOP GAIN: {res['stop_gain']}")
+                
+                with col_b:
+                    st.subheader("🚧 Barreiras")
+                    st.warning(f"RESISTÊNCIA: {res['resistencia']}")
+                    st.info(f"SUPORTE: {res['suporte']}")
+                
+                with col_c:
+                    st.subheader("📐 Fibonacci")
+                    for k, v in res['fibonacci'].items():
+                        st.write(f"**{k}:** {v}")
+
+                st.line_chart(motor.processar_df(df_proc).set_index('date')[['close', 'ma252']])
+        else:
+            st.error("Ativo não encontrado ou sem dados.")
+    except Exception as e:
+        st.error(f"Erro no sistema: {e}")
