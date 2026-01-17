@@ -6,78 +6,79 @@ class MotorAnalise:
         self.p_curto = 14
         self.p_longo = 252
 
-    def calcular_rsi(self, serie, window):
+    def calcular_rsi(self, serie, window=14):
         delta = serie.diff()
-        ganho = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-        perda = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-        rs = ganho / (perda + 1e-9)
+        gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+        rs = gain / (loss + 1e-9)
         return 100 - (100 / (1 + rs))
 
-    def analisar(self, df, info=None):
-        if len(df) < 10: return None
-        df['close'] = df['close'].ffill()
+    def analisar(self, df, info=None, ticker=""):
+        if df is None or len(df) < 10: return None
         
+        df['close'] = df['close'].ffill()
         preco_atual = float(df['close'].iloc[-1])
         ma252 = df['close'].rolling(window=min(len(df), self.p_longo)).mean().iloc[-1]
         rsi14 = self.calcular_rsi(df['close'], self.p_curto).iloc[-1]
         
-        # --- 1. ANÁLISE FUNDAMENTALISTA (VALOR) ---
+        # Identificação de Tipo de Ativo
+        is_etf = ".L" in ticker or (info and info.get('quoteType') == 'ETF')
+        is_fii = ticker.endswith('11.SA') and not is_etf
+
+        # --- VALUATION ESPECÍFICO ---
         lpa = info.get('trailingEps', 0) if info else 0
         vpa = info.get('bookValue', 0) if info else 0
         dpa = info.get('dividendRate', 0) if info else 0
         
-        p_graham = np.sqrt(max(0, 22.5 * lpa * vpa)) if (lpa > 0 and vpa > 0) else 0
-        p_bazin = dpa / 0.06 if dpa > 0 else 0
-        p_gordon = dpa / 0.08 if dpa > 0 else 0
-        
-        vals = [v for v in [p_graham, p_bazin, p_gordon] if v > 0]
-        preco_teto = np.mean(vals) if vals else preco_atual
-        margem_seguranca = preco_teto > (preco_atual * 1.10) # 10% de margem mínima
+        preco_teto = 0
+        tipo_label = "AÇÃO"
 
-        # --- 2. ANÁLISE TÉCNICA (MOMENTO) ---
-        tendencia_alta = preco_atual > ma252
-        sobrecomprado = rsi14 > 68  # Esticado (Perigo)
-        sobrevendido = rsi14 < 35   # Barato tecnicamente (Oportunidade)
-
-        # --- 3. CRUZAMENTO DE SEGURANÇA (MATRIZ DE DECISÃO) ---
-        if margem_seguranca and tendencia_alta and not sobrecomprado:
-            rec, cor = "COMPRA SEGURA (Valor + Tendência)", "green"
-        elif margem_seguranca and sobrevendido:
-            rec, cor = "COMPRA OPORTUNISTA (Valor + Reversão)", "green"
-        elif sobrecomprado:
-            rec, cor = "AGUARDAR (Preço Esticado / RSI Alto)", "yellow"
-        elif not margem_seguranca and tendencia_alta:
-            rec, cor = "MANTER (Tendência Forte, mas sem Margem)", "blue"
-        elif not margem_seguranca and not tendencia_alta:
-            rec, cor = "VENDA/FORA (Caro e em Queda)", "red"
+        if is_etf:
+            tipo_label = "UCITS (IRLANDA)"
+            preco_teto = 0 # ETFs de acúmulo não usam Bazin clássico
+        elif is_fii:
+            tipo_label = "FII"
+            preco_teto = dpa / 0.06 if dpa > 0 else 0
         else:
-            rec, cor = "AGUARDAR (Sinais Mistos)", "gray"
+            p_graham = np.sqrt(max(0, 22.5 * lpa * vpa)) if (lpa > 0 and vpa > 0) else 0
+            p_bazin = dpa / 0.06 if dpa > 0 else 0
+            vals = [v for v in [p_graham, p_bazin] if v > 0]
+            preco_teto = np.mean(vals) if vals else 0
 
-        # --- SUPORTES E STOPS ---
-        max_252 = float(df['close'].tail(252).max())
+        # --- MATRIZ DE DECISÃO (CRUZAMENTO TÉCNICO + FUNDAMENTAL) ---
+        tendencia_alta = preco_atual > ma252
+        sobrecomprado = rsi14 > 68
+        sobrevendido = rsi14 < 35
+        margem_seg = (preco_teto > preco_atual * 1.05) if preco_teto > 0 else False
+
+        if is_etf:
+            if sobrevendido: rec, cor = "COMPRA (ETF Descontado)", "green"
+            elif sobrecomprado: rec, cor = "AGUARDAR (ETF Esticado)", "yellow"
+            else: rec, cor = "MANTER (Tendência Segue)", "blue" if tendencia_alta else "gray"
+        else:
+            if margem_seg and tendencia_alta and not sobrecomprado:
+                rec, cor = f"COMPRA SEGURA ({tipo_label})", "green"
+            elif sobrecomprado:
+                rec, cor = "AGUARDAR (Preço Esticado)", "yellow"
+            elif not tendencia_alta and not margem_seg:
+                rec, cor = "FORA / VENDA (Risco Alto)", "red"
+            else:
+                rec, cor = "NEUTRO / AGUARDAR", "gray"
+
+        # --- SUPORTES E FIBONACCI ---
         min_252 = float(df['close'].tail(252).min())
+        max_252 = float(df['close'].tail(252).max())
         diff = max_252 - min_252
-        stop_tecnico = min_252 * 0.98
 
         return {
-            "preco": round(preco_atual, 2),
-            "ma252": round(ma252, 2),
-            "rsi_14": round(rsi14, 2),
-            "tendencia": "ALTA" if tendencia_alta else "BAIXA",
+            "tipo": tipo_label,
+            "preco": preco_atual,
+            "ma252": ma252,
+            "rsi": rsi14,
             "recomendacao": rec,
-            "cor_sinal": cor,
-            "val_graham": round(p_graham, 2),
-            "val_bazin": round(p_bazin, 2),
-            "val_gordon": round(p_gordon, 2),
-            "preco_teto": round(preco_teto, 2),
-            "upside": round(((preco_teto/preco_atual)-1)*100, 2),
-            "suporte": round(min_252, 2),
-            "resistencia": round(max_252, 2),
-            "stop_loss": round(stop_tecnico, 2),
-            "stop_gain": round(preco_teto, 2),
-            "fibonacci": {
-                "61.8%": round(max_252 - (0.382 * diff), 2),
-                "50.0%": round(max_252 - (0.5 * diff), 2),
-                "38.2%": round(max_252 - (0.618 * diff), 2)
-            }
+            "cor": cor,
+            "preco_teto": preco_teto,
+            "suporte": min_252,
+            "resistencia": max_252,
+            "fib": {"61.8%": max_252 - 0.382*diff, "50%": max_252 - 0.5*diff}
         }
