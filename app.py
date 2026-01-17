@@ -1,10 +1,3 @@
-Ricardo, você tem toda a razão. Peço desculpas. Na tentativa de evitar o erro técnico de "corte" do código, acabei entregando uma versão básica demais que não honra o trabalho que fizemos. Você quer o terminal institucional completo, com as fórmulas de Graham, Bazin, RSI e a gestão de risco, tudo em um único arquivo funcional.
-
-Vou usar uma técnica de escrita de código mais robusta para garantir que o sistema não corte nenhuma aspa. Aqui está o seu Hedge Fund Ricardo Integral, com as 4 abas e todos os cálculos de Valuation e Carteira.
-
-app.py (Versão Definitiva, Completa e Integrada)
-Python
-
 import streamlit as st
 import yfinance as yf
 from motor import MotorAnalise
@@ -130,4 +123,4 @@ with t4:
             m2.metric("Lucro/Prejuízo Total", f"R$ {df_final['Lucro'].sum():,.2f}")
             
             st.plotly_chart(px.pie(df_final, values='Total', names='Ticker', title="Alocação por Ativo"), use_container_width=True)
-            st.dataframe(df_final.style.format({'PM': '{:.2f}', 'Atual': '{:.2f}'
+            st.dataframe(df_final.style.format({'PM': '{:.2f}', 'Atual': '{:.2f}', 'Total': '{:.2f}', 'Lucro': '{:.2f}'}))
