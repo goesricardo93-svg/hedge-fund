@@ -14,33 +14,53 @@ class MotorAnalise:
         return 100 - (100 / (1 + rs))
 
     def analisar(self, df):
-        if len(df) < 10: return None
+        if len(df) < self.p_longo: return None
         df['close'] = df['close'].ffill()
         
-        # Cálculos principais
-        ma252_serie = df['close'].rolling(window=min(len(df), self.p_longo)).mean()
-        df['rsi_14'] = self.calcular_rsi(df['close'], self.p_curto)
-        df['rsi_252'] = self.calcular_rsi(df['close'], self.p_longo)
-        
+        # Cálculos Base
+        ma252 = df['close'].rolling(window=self.p_longo).mean().iloc[-1]
+        rsi14 = self.calcular_rsi(df['close'], self.p_curto).iloc[-1]
         preco_atual = float(df['close'].iloc[-1])
-        resistencia_anual = float(df['close'].tail(self.p_longo).max())
-        suporte_anual = float(df['close'].tail(self.p_longo).min())
+        resistencia = float(df['close'].tail(self.p_longo).max())
+        suporte = float(df['close'].tail(self.p_longo).min())
         
-        diff = resistencia_anual - suporte_anual
-        fib = {
-            "61.8%": round(resistencia_anual - (0.382 * diff), 2),
-            "50.0%": round(resistencia_anual - (0.5 * diff), 2),
-            "38.2%": round(resistencia_anual - (0.618 * diff), 2)
-        }
+        # Lógica de Recomendação Objetiva
+        tendencia_alta = preco_atual > ma252
+        distancia_suporte = (preco_atual / suporte) - 1
+        
+        if tendencia_alta:
+            if rsi14 < 45:
+                recomendacao = "COMPRA FORTE (Correção na Tendência)"
+                cor = "green"
+            elif rsi14 > 75:
+                recomendacao = "AGUARDAR (Ativo Esticado)"
+                cor = "yellow"
+            else:
+                recomendacao = "MANTER (Tendência de Alta)"
+                cor = "blue"
+        else:
+            if rsi14 > 60:
+                recomendacao = "VENDA/PROTEÇÃO (Repique na Baixa)"
+                cor = "red"
+            else:
+                recomendacao = "FORA (Tendência de Baixa)"
+                cor = "gray"
+
+        # Fibonacci
+        diff = resistencia - suporte
+        fib = {"61.8%": round(resistencia - (0.382 * diff), 2), 
+               "50.0%": round(resistencia - (0.5 * diff), 2), 
+               "38.2%": round(resistencia - (0.618 * diff), 2)}
 
         return {
             "preco": round(preco_atual, 2),
-            "rsi_14": round(df['rsi_14'].fillna(50).iloc[-1], 2),
-            "rsi_252": round(df['rsi_252'].fillna(50).iloc[-1], 2),
-            "ma252": round(ma252_serie.iloc[-1], 2),
-            "tendencia": "ALTA" if preco_atual > ma252_serie.iloc[-1] else "BAIXA",
-            "suporte": round(suporte_anual, 2),
-            "resistencia": round(resistencia_anual, 2),
+            "rsi_14": round(rsi14, 2),
+            "ma252": round(ma252, 2),
+            "tendencia": "ALTA" if tendencia_alta else "BAIXA",
+            "recomendacao": recomendacao,
+            "cor_sinal": cor,
+            "suporte": round(suporte, 2),
+            "resistencia": round(resistencia, 2),
             "stop_loss": round(preco_atual * 0.97, 2),
             "stop_gain": round(preco_atual * 1.06, 2),
             "fibonacci": fib
