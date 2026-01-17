@@ -13,60 +13,44 @@ class MotorAnalise:
         rs = ganho / (perda + 1e-9)
         return 100 - (100 / (1 + rs))
 
-    def analisar(self, df):
-        if len(df) < self.p_longo: return None
+    def analisar(self, df, info=None):
+        if len(df) < 10: return None
         df['close'] = df['close'].ffill()
         
-        # Cálculos Base
-        ma252_serie = df['close'].rolling(window=self.p_longo).mean()
-        ma252 = ma252_serie.iloc[-1]
-        rsi14 = self.calcular_rsi(df['close'], self.p_curto).iloc[-1]
-        rsi252 = self.calcular_rsi(df['close'], self.p_longo).iloc[-1]
-        
         preco_atual = float(df['close'].iloc[-1])
-        resistencia = float(df['close'].tail(self.p_longo).max())
-        suporte = float(df['close'].tail(self.p_longo).min())
+        ma252 = df['close'].rolling(window=min(len(df), self.p_longo)).mean().iloc[-1]
         
-        # Lógica de Recomendação Objetiva
-        tendencia_alta = preco_atual > ma252
-        
-        if tendencia_alta:
-            if rsi14 < 45:
-                recomendacao = "COMPRA (Correção na Tendência)"
-                cor = "green"
-            elif rsi14 > 75:
-                recomendacao = "AGUARDAR (Ativo Esticado)"
-                cor = "yellow"
-            else:
-                recomendacao = "MANTER (Tendência de Alta)"
-                cor = "blue"
-        else:
-            if rsi14 > 60:
-                recomendacao = "VENDA (Repique na Baixa)"
-                cor = "red"
-            else:
-                recomendacao = "FORA (Tendência de Baixa)"
-                cor = "gray"
+        # --- VALUATIONS (Fundamentalista) ---
+        # Extração de dados (ou valores fictícios para teste se info estiver vazio)
+        lpa = info.get('trailingEps', 2.0) if info else 2.0
+        vpa = info.get('bookValue', 15.0) if info else 15.0
+        dpa = info.get('dividendRate', 1.0) if info else 1.0
+        g = 0.05 # Crescimento esperado de 5%
+        k = 0.11 # Taxa de desconto (Selic/Oportunidade)
 
-        # Fibonacci
-        diff = resistencia - suporte
-        fib = {
-            "61.8%": round(resistencia - (0.382 * diff), 2),
-            "50.0%": round(resistencia - (0.5 * diff), 2),
-            "38.2%": round(resistencia - (0.618 * diff), 2)
-        }
+        # 1. Graham
+        preco_graham = np.sqrt(22.5 * lpa * vpa) if (lpa > 0 and vpa > 0) else 0
+        
+        # 2. Bazin (Dividend Yield 6%)
+        preco_bazin = dpa / 0.06 if dpa else 0
+        
+        # 3. Gordon
+        preco_gordon = (dpa * (1 + g)) / (k - g) if (k > g) else 0
+
+        # --- PROJEÇÕES ---
+        media_valua = np.mean([p for p in [preco_graham, preco_bazin, preco_gordon] if p > 0])
+        upside = ((media_valua / preco_atual) - 1) * 100
 
         return {
             "preco": round(preco_atual, 2),
-            "rsi_14": round(rsi14, 2),
-            "rsi_252": round(rsi252, 2),
             "ma252": round(ma252, 2),
-            "tendencia": "ALTA" if tendencia_alta else "BAIXA",
-            "recomendacao": recomendacao,
-            "cor_sinal": cor,
-            "suporte": round(suporte, 2),
-            "resistencia": round(resistencia, 2),
-            "stop_loss": round(preco_atual * 0.97, 2),
-            "stop_gain": round(preco_atual * 1.06, 2),
-            "fibonacci": fib
+            "rsi_14": round(self.calcular_rsi(df['close'], self.p_curto).iloc[-1], 2),
+            "recomendacao": "COMPRA" if preco_atual < media_valua and preco_atual > ma252 else "AGUARDAR",
+            "val_graham": round(preco_graham, 2),
+            "val_bazin": round(preco_bazin, 2),
+            "val_gordon": round(preco_gordon, 2),
+            "upside_longo_prazo": round(upside, 2),
+            "suporte": round(df['close'].tail(252).min(), 2),
+            "resistencia": round(df['close'].tail(252).max(), 2),
+            "fibonacci": {"61.8%": round(preco_atual * 1.1, 2)} # Simplificado para o exemplo
         }
