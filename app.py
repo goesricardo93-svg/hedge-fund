@@ -5,59 +5,52 @@ import pandas as pd
 
 st.set_page_config(page_title="Terminal Ricardo", layout="wide")
 
+# Cache para evitar "Muitas Solicitações"
+@st.cache_data(ttl=300)
+def carregar_dados(ticker):
+    data = yf.download(ticker, period="2y", progress=False)
+    info = yf.Ticker(ticker).info
+    return data, info
+
 def formatar_ticker(t):
     t = t.strip().upper()
     if "." in t: return t
     if t in ["VWRA", "VUSA", "CSPX"]: return f"{t}.L"
     return f"{t}.SA"
 
-st.sidebar.header("🕹️ Sistema de Decisão")
+st.sidebar.header("🕹️ Hedge Fund System")
 ticker_input = st.sidebar.text_input("Ticker:", value="BBSE3")
 ticker_final = formatar_ticker(ticker_input)
 
-tab1, tab2, tab3 = st.tabs(["📊 Análise Técnica & Valor", "🏙️ Scanner FIIs", "🛡️ PGBL"])
+tab1, tab2, tab3 = st.tabs(["📊 Terminal de Valor", "🏙️ Scanner FIIs", "🛡️ PGBL"])
 
 with tab1:
     try:
-        data = yf.download(ticker_final, period="2y", progress=False)
+        data, info = carregar_dados(ticker_final)
         if not data.empty:
-            info = yf.Ticker(ticker_final).info
             m = MotorAnalise()
             res = m.analisar(data, info, ticker_final)
 
-            # --- HEADER DE MÉTRICAS ---
+            # --- DASHBOARD DE MÉTRICAS ---
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Preço Atual", f"R$ {res['preco']:.2f}")
             c2.metric("Preço Teto", f"R$ {res['preco_teto']:.2f}" if res['preco_teto'] > 0 else "N/A", f"{res['upside']:.1f}%")
             c3.metric("RSI (14d)", f"{res['rsi']:.1f}")
             c4.metric("Tendência", res['tendencia'])
 
-            st.subheader(f"Veredito: :{res['cor']}[{res['recomendacao']}]")
-            
-            # --- GRÁFICO ---
+            st.markdown(f"### Veredito: :{res['cor']}[{res['recomendacao']}]")
             st.line_chart(res['precos_serie'])
 
-            # --- DETALHES TÉCNICOS ---
-            col_a, col_b, col_c = st.columns(3)
-            with col_a:
-                st.write("**📊 Valuation**")
-                st.write(f"Preço Teto: R$ {res['preco_teto']:.2f}")
-                st.write(f"Upside Estimado: {res['upside']:.2f}%")
-            with col_b:
-                st.write("**📈 Técnico**")
-                st.write(f"Média 252 (Anual): R$ {res['ma252']:.2f}")
-                st.write(f"Suporte (Mínima): R$ {res['suporte']:.2f}")
-            with col_c:
-                st.write("**🛡️ Risco**")
-                st.write(f"Tipo: {res['tipo']}")
-                st.write(f"Status RSI: {'Sobrecomprado' if res['rsi'] > 70 else 'Normal'}")
+            # --- INFO BOXES ---
+            col_a, col_b = st.columns(2)
+            col_a.info(f"**Análise de Valor:** Preço Teto baseado em Bazin/Graham. Upside de {res['upside']:.2f}%.")
+            col_b.info(f"**Análise Técnica:** Suporte Anual em R$ {res['suporte']:.2f}. Média 252p em R$ {res['ma252']:.2f}.")
 
     except Exception as e:
-        st.error(f"Erro ao processar: {e}")
+        st.error(f"Erro no processamento: {e}")
 
-# (As outras abas de FII e PGBL permanecem como estavam para não 'cagar' o que deu certo)
 with tab2:
-    st.header("Scanner de FIIs")
+    st.header("Scanner de FIIs (CSV)")
     try:
         df_fii = pd.read_csv("statusinvest-busca-avancada.csv", sep=";", encoding="utf-8")
         def clean(c): return pd.to_numeric(df_fii[c].astype(str).str.replace('.','',regex=False).str.replace(',','.',regex=False), errors='coerce')
@@ -68,6 +61,6 @@ with tab2:
     except: st.info("Adicione o CSV na pasta.")
 
 with tab3:
-    st.header("PGBL")
+    st.header("Planejamento Fiscal")
     r = st.number_input("Renda Anual:", value=200000.0)
-    st.metric("Aporte 12%", f"R$ {r*0.12:.2f}")
+    st.metric("Aporte PGBL (12%)", f"R$ {r*0.12:.2f}")
