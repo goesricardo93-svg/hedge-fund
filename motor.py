@@ -1,63 +1,62 @@
+import streamlit as st
+import yfinance as yf
 import pandas as pd
-import numpy as np
+from motor import MotorAnalise
 
-class MotorAnalise:
-    def __init__(self):
-        self.p_curto = 14
-        self.p_longo = 252
+st.set_page_config(page_title="Hedge Fund Dashboard", layout="wide")
+st.title("🏛️ Terminal Hedge Fund - Inteligência 252p")
 
-    def calcular_rsi(self, serie, window):
-        delta = serie.diff()
-        ganho = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-        perda = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-        rs = ganho / perda
-        return 100 - (100 / (1 + rs))
+motor = MotorAnalise()
 
-    def processar_df(self, df):
-        # Garante que os dados estão em ordem cronológica
-        df = df.sort_index()
-        
-        # Médias Móveis
-        df['ma20'] = df['close'].rolling(window=20).mean()
-        df['ma252'] = df['close'].rolling(window=self.p_longo).mean()
+# --- INPUT DE TICKER ---
+ticker = st.text_input("Consultar Ativo:", value="BTC-USD").upper().strip()
 
-        # RSIs
-        df['rsi_14'] = self.calcular_rsi(df['close'], self.p_curto)
-        df['rsi_252'] = self.calcular_rsi(df['close'], self.p_longo)
-        
-        # Identificação de Topos e Fundos para Divergência
-        df['topo'] = (df['close'] > df['close'].shift(1)) & (df['close'] > df['close'].shift(-1))
-        df['fundo'] = (df['close'] < df['close'].shift(1)) & (df['close'] < df['close'].shift(-1))
-        
-        return df
+if ticker:
+    try:
+        df_ind = yf.download(ticker, period="4y", progress=False)
+        if not df_ind.empty:
+            # Padronização de Colunas
+            if isinstance(df_ind.columns, pd.MultiIndex): df_ind.columns = df_ind.columns.get_level_values(0)
+            df_ind.columns = [str(col).lower() for col in df_ind.columns]
+            df_proc = df_ind.reset_index()
+            df_proc.columns = [str(col).lower() for col in df_proc.columns]
 
-    def detectar_divergencia(self, df):
-        indices_topos = df.index[df['topo']].tolist()
-        if len(indices_topos) < 2: return "NEUTRO"
+            res = motor.analisar(df_proc)
+            
+            # --- BLOCO 1: MÉTRICAS DE FORÇA (RSI E TENDÊNCIA) ---
+            st.markdown(f"### 📈 Análise de Momentum: {ticker}")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Preço Atual", f"$ {res['preco']:,.2f}")
+            c2.metric("Tendência (252p)", res['tendencia'])
+            c3.metric("RSI Tático (14p)", res['rsi_14'])
+            c4.metric("RSI Macro (252p)", res['rsi_252'])
 
-        # Últimos dois topos para análise macro (252p)
-        t1, t2 = indices_topos[-2], indices_topos[-1]
-        
-        preco_subiu = df['close'].iloc[t2] > df['close'].iloc[t1]
-        rsi_caiu = df['rsi_252'].iloc[t2] < df['rsi_252'].iloc[t1]
+            st.markdown("---")
 
-        if preco_subiu and rsi_caiu and df['rsi_252'].iloc[t2] > 50:
-            return "BAIXA MACRO (Divergência)"
-        
-        # Tendência simples por Média
-        if df['close'].iloc[-1] > df['ma252'].iloc[-1]:
-            return "ALTA (Acima da MA252)"
-        
-        return "TENDÊNCIA DE BAIXA"
+            # --- BLOCO 2: SUPORTE, RESISTÊNCIA E RISCO ---
+            col_risk, col_sr, col_fib = st.columns(3)
 
-    def analisar(self, dados_brutos):
-        df = self.processar_df(dados_brutos)
-        if len(df) < self.p_longo:
-            return {"status": "Dados Insuficientes (Mín. 252 dias)"}
-        
-        return {
-            "preco": round(df['close'].iloc[-1], 2),
-            "rsi_252": round(df['rsi_252'].iloc[-1], 2),
-            "ma252": round(df['ma252'].iloc[-1], 2),
-            "sinal": self.detectar_divergencia(df)
-        }
+            with col_risk:
+                st.subheader("🛡️ Gestão de Risco")
+                st.error(f"STOP LOSS: $ {res['stop_loss']:,.2f}")
+                st.success(f"STOP GAIN: $ {res['stop_gain']:,.2f}")
+                st.info(f"MÉDIA ANUAL: $ {res['ma252']:,.2f}")
+
+            with col_sr:
+                st.subheader("🚧 Barreiras de Preço")
+                st.warning(f"RESISTÊNCIA (Topo): $ {res['resistencia']:,.2f}")
+                st.write(f"**SUPORTE (Fundo):** $ {res['suporte']:,.2f}")
+
+            with col_fib:
+                st.subheader("📐 Fibonacci (252p)")
+                for n, v in res['fibonacci'].items():
+                    st.write(f"**{n}:** $ {v:,.2f}")
+
+            # --- BLOCO 3: GRÁFICO ---
+            st.markdown("---")
+            st.write("### Gráfico de Preço e Média Anual")
+            df_vis = motor.processar_df(df_proc).set_index('date')
+            st.line_chart(df_vis[['close', 'ma252']])
+            
+    except Exception as e:
+        st.error(f"Erro na análise: {e}")
