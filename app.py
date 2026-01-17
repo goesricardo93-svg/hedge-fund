@@ -15,11 +15,9 @@ ticker = f"{t_input}.SA" if "-" not in t_input and "." not in t_input and any(c.
 if ticker:
     try:
         t_obj = yf.Ticker(ticker)
-        # Força o download limpo para evitar erros de data
         df = yf.download(ticker, period="4y", progress=False)
         
         if not df.empty:
-            # Tratamento rigoroso para o gráfico não ficar em branco
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             df_p = df.reset_index()
@@ -28,23 +26,30 @@ if ticker:
             res = motor.analisar(df_p, t_obj.info)
             
             if res:
-                # 1. VEREDITO
+                # 1. VEREDITO EM DESTAQUE
+                st.markdown("---")
                 c_map = {"green": "#00CC96", "red": "#FF4B4B", "blue": "#1F77B4", "yellow": "#FFA500", "gray": "#808080"}
-                st.markdown(f"<h2 style='color:{c_map.get(res['cor_sinal'], '#FFF')};'>🎯 Veredito: {res['recomendacao']}</h2>", unsafe_allow_html=True)
+                st.markdown(f"<h2 style='text-align: center; color:{c_map.get(res['cor_sinal'], '#FFF')};'>🎯 Veredito: {res['recomendacao']}</h2>", unsafe_allow_html=True)
 
-                # 2. VALUATIONS (PREÇO TETO ATUALIZADO)
-                st.subheader("💎 Valuation e Preço Teto")
-                v1, v2, v3, v4 = st.columns(4)
+                # 2. VALUATIONS E PREÇOS (5 COLUNAS NO TOPO)
+                st.subheader("💎 Valuation e Comparativo de Preço")
+                v1, v2, v3, v4, v5 = st.columns(5)
+                
                 v1.metric("Graham", f"R$ {res['val_graham']}")
                 v2.metric("Bazin", f"R$ {res['val_bazin']}")
                 v3.metric("Gordon", f"R$ {res['val_gordon']}")
-                # Alterado de Upside para Preço Teto conforme solicitado
-                v4.metric("PREÇO TETO", f"R$ {res['preco_teto']}", delta=round(res['preco_teto'] - res['preco'], 2))
+                
+                # Preço Teto com Delta do potencial de ganho
+                v4.metric("PREÇO TETO", f"R$ {res['preco_teto']}", delta=f"{res['upside']}%")
+                
+                # PREÇO ATUAL EM DESTAQUE
+                v5.metric("PREÇO ATUAL", f"R$ {res['preco']}", delta_color="off")
 
-                # 3. GRÁFICO (CORREÇÃO DA LINHA DE EVOLUÇÃO)
+                # 3. GRÁFICO OPERACIONAL
+                st.markdown("---")
                 fig = go.Figure()
-                # Adiciona a linha de fechamento (Preço real)
-                fig.add_trace(go.Scatter(x=df_p['date'], y=df_p['close'], name="Evolução do Ativo", line=dict(color='#00f2ff', width=2)))
+                fig.add_trace(go.Scatter(x=df_p['date'], y=df_p['close'], name="Preço", line=dict(color='#00f2ff', width=2)))
+                
                 # Linhas de Sinal
                 fig.add_hline(y=res['stop_loss'], line_color="red", line_dash="dash", annotation_text="STOP LOSS")
                 fig.add_hline(y=res['stop_gain'], line_color="green", line_dash="dash", annotation_text="STOP GAIN")
@@ -58,13 +63,12 @@ if ticker:
                 col1, col2, col3 = st.columns(3)
                 with col1:
                     st.subheader("🛡️ Gestão de Risco")
-                    st.write(f"**STOP LOSS:** R$ {res['stop_loss']}")
-                    st.write(f"**STOP GAIN:** R$ {res['stop_gain']}")
-                    st.write(f"**PREÇO ATUAL:** R$ {res['preco']}")
+                    st.error(f"**STOP LOSS:** R$ {res['stop_loss']}")
+                    st.success(f"**STOP GAIN:** R$ {res['stop_gain']}")
                 with col2:
                     st.subheader("🚧 Barreiras Anuais")
-                    st.write(f"**RESISTÊNCIA:** R$ {res['resistencia']}")
-                    st.write(f"**SUPORTE:** R$ {res['suporte']}")
+                    st.warning(f"**RESISTÊNCIA:** R$ {res['resistencia']}")
+                    st.info(f"**SUPORTE:** R$ {res['suporte']}")
                 with col3:
                     st.subheader("📐 Fibonacci")
                     for k, v in res['fibonacci'].items():
