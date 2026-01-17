@@ -5,8 +5,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 
-# 1. SETUP E CARTEIRA INTEGRAL (31 ATIVOS)
-st.set_page_config(page_title="Hedge Fund Ricardo | Terminal v1.0", layout="wide")
+# 1. SETUP E CARTEIRA (31 ATIVOS)
+st.set_page_config(page_title="Hedge Fund Ricardo | Terminal", layout="wide")
 
 if 'meus_ativos' not in st.session_state:
     data = [
@@ -35,24 +35,18 @@ def load_market_data(tk):
 def analise_360_fii(row):
     try:
         p_vp = row.get('P/VP_N', 0)
-        dy = row.get('DY_N', 0)
         vac = row.get('VAC_N', 0)
         seg = str(row.get('SEGMENTO', '')).upper()
-        margem = row.get('Margem Seg. (%)', 0)
         if "PAPEL" in seg:
-            if 0.98 <= p_vp <= 1.01: return "🔥 COMPRA SEGURA"
-            return "🟡 OBSERVAR"
-        else:
-            if vac > 12: return "❌ EVITAR (Vacância)"
-            if p_vp < 0.96 and margem > 5: return "🏢 OPORTUNIDADE"
-            return "✅ MANTÉM"
+            return "🔥 COMPRA" if 0.98 <= p_vp <= 1.01 else "🟡 OBSERVAR"
+        return "🏢 OPORTUNIDADE" if vac < 10 and p_vp < 0.96 else "✅ MANTÉM"
     except: return "Analise Manual"
 
 def rec_carteira(tk, preco, pm, info):
     dy = info.get('dividendYield', 0) or 0
     teto = (preco * dy) / 0.06 if dy > 0 else 0
     if preco < pm * 0.96: return "💰 COMPRAR"
-    if teto > 0 and preco > teto * 1.15: return "⚠️ VENDER / CARO"
+    if teto > 0 and preco > teto * 1.15: return "⚠️ VENDER"
     return "✅ MANTÉM"
 
 # 3. INTERFACE
@@ -62,49 +56,71 @@ tk = q_tk if "." in q_tk else f"{q_tk}.SA"
 
 t1, t2, t3, t4 = st.tabs(["📊 Inteligência", "🏙️ Scanner FIIs", "🛡️ PGBL", "💼 CARTEIRA"])
 
+# --- ABA 1: INTELIGÊNCIA COMPLETA ---
 with t1:
     hist, info = load_market_data(tk)
     if not hist.empty:
         r = MotorAnalise().analisar(hist, info, tk)
-        
-        # Dashboard de Métricas
         m = st.columns(5)
         m[0].metric("Preço", f"R$ {r['preco']:.2f}")
-        m[1].metric("Alvo (Gain)", f"R$ {r['stop_gain']:.2f}")
+        m[1].metric("Alvo", f"R$ {r['stop_gain']:.2f}")
         m[2].metric("ROE", f"{info.get('returnOnEquity', 0)*100:.1f}%")
-        m[3].metric("Dividend Yield", f"{info.get('dividendYield', 0)*100:.2f}%")
+        m[3].metric("DY", f"{info.get('dividendYield', 0)*100:.2f}%")
         m[4].metric("P. Bazin", f"R$ {r['p_bazin']:.2f}")
         
         st.markdown(f"### Veredito: :{r['cor']}[{r['recomendacao']}]")
         
-        # Gráfico Técnico Integral
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'], name='Preço', line=dict(color='#29b5e8', width=2)))
-        fig.add_trace(go.Scatter(x=hist.index, y=[r['stop_gain']]*len(hist), name='🎯 ALVO', line=dict(dash='dash', color='gold')))
-        fig.add_trace(go.Scatter(x=hist.index, y=[r['suporte']]*len(hist), name='🛡️ SUPORTE', line=dict(dash='dash', color='green')))
-        fig.add_trace(go.Scatter(x=hist.index, y=[r['stop_loss']]*len(hist), name='🚫 STOP', line=dict(dash='dot', color='red')))
+        fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'], name='Preço'))
+        fig.add_trace(go.Scatter(x=hist.index, y=[r['stop_gain']]*len(hist), name='ALVO', line=dict(dash='dash', color='gold')))
+        fig.add_trace(go.Scatter(x=hist.index, y=[r['suporte']]*len(hist), name='SUPORTE', line=dict(dash='dash', color='green')))
+        fig.add_trace(go.Scatter(x=hist.index, y=[r['stop_loss']]*len(hist), name='STOP', line=dict(dash='dot', color='red')))
         st.plotly_chart(fig, use_container_width=True)
         
-        # TABELA FUNDAMENTALISTA INTEGRAL
         st.subheader("📋 Resumo Fundamentalista")
-        df_fund = pd.DataFrame({
-            "Métrica": ["P/L", "P/VP", "DY (%)", "ROE (%)", "Margem Líquida (%)", "Dívida Bruta/EBITDA", "Graham", "Bazin", "Gordon"],
+        fund_data = {
+            "Métrica": ["P/L", "P/VP", "DY (%)", "ROE (%)", "Margem Líq (%)", "Dívida/EBITDA", "Graham", "Bazin", "Gordon"],
             "Valor": [
-                f"{info.get('trailingPE', 0):.2f}",
-                f"{info.get('priceToBook', 0):.2f}",
-                f"{info.get('dividendYield', 0)*100:.2f}%",
-                f"{info.get('returnOnEquity', 0)*100:.1f}%",
-                f"{info.get('profitMargins', 0)*100:.1f}%",
-                f"{info.get('debtToEbitda', 0):.2f}",
-                f"R$ {r['p_graham']:.2f}",
-                f"R$ {r['p_bazin']:.2f}",
-                f"R$ {r['p_gordon']:.2f}"
+                f"{info.get('trailingPE', 0):.2f}", f"{info.get('priceToBook', 0):.2f}",
+                f"{info.get('dividendYield', 0)*100:.2f}%", f"{info.get('returnOnEquity', 0)*100:.1f}%",
+                f"{info.get('profitMargins', 0)*100:.1f}%", f"{info.get('debtToEbitda', 0):.2f}",
+                f"R$ {r['p_graham']:.2f}", f"R$ {r['p_bazin']:.2f}", f"R$ {r['p_gordon']:.2f}"
             ]
-        })
-        st.table(df_fund)
+        }
+        st.table(pd.DataFrame(fund_data))
 
+# --- ABA 2: SCANNER FII INTEGRAL ---
 with t2:
-    st.header("🏙️ Scanner FII - Stress Test 360º")
+    st.header("🏙️ Scanner FII 360º")
     try:
         df = pd.read_csv("statusinvest-busca-avancada.csv", sep=";", encoding="latin-1")
-        df.columns = [c.strip
+        # Correção do Erro de Syntax:
+        df.columns = [str(c).strip().upper() for c in df.columns]
+        
+        for c in ['P/VP', 'DY', 'PRECO', 'VACANCIA FISICA']:
+            if c in df.columns:
+                df[c+'_N'] = pd.to_numeric(df[c].astype(str).str.replace('.','').str.replace(',','.'), errors='coerce')
+        
+        df['VAC_N'] = df.get('VACANCIA FISICA_N', 0)
+        df['Teto Bazin'] = (df['PRECO_N'] * (df['DY_N']/100)) / 0.06
+        df['Margem Seg. (%)'] = ((df['Teto Bazin'] / df['PRECO_N']) - 1) * 100
+        df['VEREDITO 360º'] = df.apply(analise_360_fii, axis=1)
+        
+        st.dataframe(df[['TICKER', 'VEREDITO 360º', 'P/VP', 'DY', 'VACANCIA FISICA', 'Margem Seg. (%)']].sort_values('Margem Seg. (%)', ascending=False))
+    except Exception as e: st.error(f"Erro no Scanner: {e}")
+
+# --- ABA 4: CARTEIRA E RECOMENDAÇÃO ---
+with t4:
+    st.header("💼 Gestão de Carteira")
+    df_ed = st.data_editor(st.session_state.meus_ativos, num_rows="dynamic", use_container_width=True)
+    if st.button("🔄 Sincronizar Tudo"):
+        res = []
+        for _, row in df_ed.iterrows():
+            obj = yf.Ticker(row['Ticker'])
+            p_a = obj.fast_info['last_price']
+            rec = rec_carteira(row['Ticker'], p_a, row['PM'], obj.info)
+            res.append({"Atual": p_a, "Recomendação": rec, "Total": p_a * row['Qtd'], "Lucro": (p_a - row['PM']) * row['Qtd']})
+        
+        df_f = pd.concat([df_ed, pd.DataFrame(res)], axis=1)
+        st.metric("Patrimônio Total", f"R$ {df_f['Total'].sum():,.2f}")
+        st.dataframe(df_f.style.applymap(lambda x: 'background-color: #2ecc71' if 'COMPRAR' in str(x) else ('background-color: #e74c3c' if 'VENDER' in str(x) else ''), subset=['Recomendação']))
