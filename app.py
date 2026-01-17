@@ -5,7 +5,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 
-# 1. SETUP E CARTEIRA INTEGRAL
+# 1. SETUP E CARTEIRA INTEGRAL (31 ATIVOS)
 st.set_page_config(page_title="Hedge Fund Ricardo | Terminal v1.0", layout="wide")
 
 if 'meus_ativos' not in st.session_state:
@@ -34,18 +34,25 @@ def load_market_data(tk):
 
 def analise_360_fii(row):
     try:
-        p_vp, dy, vac = row.get('P/VP_N', 0), row.get('DY_N', 0), row.get('VAC_N', 0)
+        p_vp = row.get('P/VP_N', 0)
+        dy = row.get('DY_N', 0)
+        vac = row.get('VAC_N', 0)
         seg = str(row.get('SEGMENTO', '')).upper()
+        margem = row.get('Margem Seg. (%)', 0)
         if "PAPEL" in seg:
-            return "🔥 COMPRA SEGURA" if 0.98 <= p_vp <= 1.01 else "🟡 OBSERVANDO"
-        return "🏢 OPORTUNIDADE" if vac < 10 and p_vp < 0.95 else "✅ MANTÉM"
+            if 0.98 <= p_vp <= 1.01: return "🔥 COMPRA SEGURA"
+            return "🟡 OBSERVAR"
+        else:
+            if vac > 12: return "❌ EVITAR (Vacância)"
+            if p_vp < 0.96 and margem > 5: return "🏢 OPORTUNIDADE"
+            return "✅ MANTÉM"
     except: return "Analise Manual"
 
 def rec_carteira(tk, preco, pm, info):
     dy = info.get('dividendYield', 0) or 0
     teto = (preco * dy) / 0.06 if dy > 0 else 0
-    if preco < pm * 0.97: return "💰 COMPRAR"
-    if teto > 0 and preco > teto * 1.1: return "⚠️ VENDER"
+    if preco < pm * 0.96: return "💰 COMPRAR"
+    if teto > 0 and preco > teto * 1.15: return "⚠️ VENDER / CARO"
     return "✅ MANTÉM"
 
 # 3. INTERFACE
@@ -59,27 +66,29 @@ with t1:
     hist, info = load_market_data(tk)
     if not hist.empty:
         r = MotorAnalise().analisar(hist, info, tk)
-        # Métricas de Topo
+        
+        # Dashboard de Métricas
         m = st.columns(5)
         m[0].metric("Preço", f"R$ {r['preco']:.2f}")
         m[1].metric("Alvo (Gain)", f"R$ {r['stop_gain']:.2f}")
         m[2].metric("ROE", f"{info.get('returnOnEquity', 0)*100:.1f}%")
-        m[3].metric("DY (Anual)", f"{info.get('dividendYield', 0)*100:.2f}%")
+        m[3].metric("Dividend Yield", f"{info.get('dividendYield', 0)*100:.2f}%")
         m[4].metric("P. Bazin", f"R$ {r['p_bazin']:.2f}")
         
         st.markdown(f"### Veredito: :{r['cor']}[{r['recomendacao']}]")
         
-        # Gráfico Técnico
+        # Gráfico Técnico Integral
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'], name='Preço', line=dict(color='#29b5e8', width=2)))
-        fig.add_trace(go.Scatter(x=hist.index, y=[r['stop_gain']]*len(hist), name='ALVO', line=dict(dash='dash', color='gold')))
-        fig.add_trace(go.Scatter(x=hist.index, y=[r['stop_loss']]*len(hist), name='STOP', line=dict(dash='dot', color='red')))
+        fig.add_trace(go.Scatter(x=hist.index, y=[r['stop_gain']]*len(hist), name='🎯 ALVO', line=dict(dash='dash', color='gold')))
+        fig.add_trace(go.Scatter(x=hist.index, y=[r['suporte']]*len(hist), name='🛡️ SUPORTE', line=dict(dash='dash', color='green')))
+        fig.add_trace(go.Scatter(x=hist.index, y=[r['stop_loss']]*len(hist), name='🚫 STOP', line=dict(dash='dot', color='red')))
         st.plotly_chart(fig, use_container_width=True)
         
-        # TABELA DE INFORMAÇÕES FUNDAMENTALISTAS (A CORRIGIDA)
+        # TABELA FUNDAMENTALISTA INTEGRAL
         st.subheader("📋 Resumo Fundamentalista")
-        dados_fund = {
-            "Indicador": ["P/L", "P/VP", "DY", "ROE", "Margem Líquida", "Dívida Bruta/EBITDA", "Preço Graham", "Preço Bazin"],
+        df_fund = pd.DataFrame({
+            "Métrica": ["P/L", "P/VP", "DY (%)", "ROE (%)", "Margem Líquida (%)", "Dívida Bruta/EBITDA", "Graham", "Bazin", "Gordon"],
             "Valor": [
                 f"{info.get('trailingPE', 0):.2f}",
                 f"{info.get('priceToBook', 0):.2f}",
@@ -88,7 +97,14 @@ with t1:
                 f"{info.get('profitMargins', 0)*100:.1f}%",
                 f"{info.get('debtToEbitda', 0):.2f}",
                 f"R$ {r['p_graham']:.2f}",
-                f"R$ {r['p_bazin']:.2f}"
+                f"R$ {r['p_bazin']:.2f}",
+                f"R$ {r['p_gordon']:.2f}"
             ]
-        }
-        st
+        })
+        st.table(df_fund)
+
+with t2:
+    st.header("🏙️ Scanner FII - Stress Test 360º")
+    try:
+        df = pd.read_csv("statusinvest-busca-avancada.csv", sep=";", encoding="latin-1")
+        df.columns = [c.strip
