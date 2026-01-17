@@ -6,21 +6,29 @@ import plotly.graph_objects as go
 
 st.set_page_config(page_title="Terminal Ricardo - Hedge Fund", layout="wide")
 
-# Função para automatizar a análise que fizemos no chat
-def gerar_veredito_fii(row):
+# --- FUNÇÕES DE APOIO ---
+
+def gerar_veredito_seguro(row):
+    """Lógica de análise 360º para FIIs"""
     try:
-        margem = row['Margem Seg. (%)']
         pvp = row['P/VP_N']
         dy = row['DY_N']
+        margem = row['Margem Seg. (%)']
+        segmento = str(row['SEGMENTO']).upper()
         
-        if pvp < 0.93 and margem > 10 and dy > 0.7:
-            return "🔥 COMPRA FORTE (Desconto + Yield)"
-        elif pvp <= 1.0 and margem > 0:
-            return "✅ COMPRA (Preço Justo)"
-        elif pvp > 1.05:
-            return "⚠️ AGUARDAR (Acima do VP)"
-        else:
-            return "🟡 NEUTRO"
+        if "PAPEL" in segmento or "TÍTULOS" in segmento:
+            if 0.95 <= pvp <= 1.03 and dy > 0.8:
+                return "🔥 COMPRA SEGURA (Papel/Renda)"
+            elif pvp < 0.90:
+                return "⚠️ RISCO (Desconto excessivo em Papel)"
+        else: # Tijolo
+            if pvp < 0.95 and margem > 5:
+                return "🏢 OPORTUNIDADE (Tijolo barato)"
+        
+        if margem > 15 and pvp <= 1.05:
+            return "✅ COMPRA (Margem Bazin)"
+            
+        return "🟡 NEUTRO"
     except:
         return "Analisando..."
 
@@ -39,13 +47,16 @@ def formatar_ticker(t):
     if t in ["VWRA", "VUSA", "CSPX"]: return f"{t}.L"
     return f"{t}.SA"
 
+# --- INTERFACE ---
+
 st.sidebar.header("🕹️ Comando Central")
-ticker_raw = st.sidebar.text_input("Ticker:", value="BBSE3")
+ticker_raw = st.sidebar.text_input("Ticker Ação/ETF:", value="BBSE3")
 ticker_final = formatar_ticker(ticker_raw)
 
-aba1, aba2, aba3 = st.tabs(["📊 Inteligência de Mercado", "🏙️ Scanner FIIs", "🛡️ PGBL"])
+tab1, tab2, tab3 = st.tabs(["📊 Inteligência de Mercado", "🏙️ Scanner FIIs", "🛡️ Gestão PGBL"])
 
-with aba1:
+# --- ABA 1: AÇÕES E ETFS ---
+with tab1:
     try:
         data, info = carregar_dados_completos(ticker_final)
         if not data.empty:
@@ -59,14 +70,15 @@ with aba1:
 
                 st.markdown(f"### Veredito: :{res['cor']}[{res['recomendacao']}]")
                 
+                # Gráfico Plotly
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=res['precos_serie'].index, y=res['precos_serie'].values, name='PREÇO ATUAL', line=dict(color='#29b5e8', width=3)))
-                fig.add_trace(go.Scatter(x=res['precos_serie'].index, y=[res['suporte']]*len(res['precos_serie']), name='🛡️ SUPORTE ANUAL', line=dict(color='#2ecc71', width=2, dash='dash')))
-                fig.add_trace(go.Scatter(x=res['precos_serie'].index, y=[res['stop_loss']]*len(res['precos_serie']), name='🚫 STOP LOSS', line=dict(color='#e74c3c', width=2, dash='dot')))
+                fig.add_trace(go.Scatter(x=res['precos_serie'].index, y=res['precos_serie'].values, name='PREÇO', line=dict(color='#29b5e8', width=3)))
+                fig.add_trace(go.Scatter(x=res['precos_serie'].index, y=[res['suporte']]*len(res['precos_serie']), name='🛡️ SUPORTE', line=dict(color='#2ecc71', dash='dash')))
+                fig.add_trace(go.Scatter(x=res['precos_serie'].index, y=[res['stop_loss']]*len(res['precos_serie']), name='🚫 STOP LOSS', line=dict(color='#e74c3c', dash='dot')))
                 if res['preco_teto'] > 0:
-                    fig.add_trace(go.Scatter(x=res['precos_serie'].index, y=[res['stop_gain']]*len(res['precos_serie']), name='🎯 ALVO / STOP GAIN', line=dict(color='#f1c40f', width=2, dash='dashdot')))
+                    fig.add_trace(go.Scatter(x=res['precos_serie'].index, y=[res['stop_gain']]*len(res['precos_serie']), name='🎯 ALVO', line=dict(color='#f1c40f', dash='dashdot')))
 
-                fig.update_layout(height=500, margin=dict(l=10, r=10, t=50, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5, font=dict(size=14)), hovermode="x unified")
+                fig.update_layout(height=450, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5), margin=dict(l=0,r=0,b=0,t=50))
                 st.plotly_chart(fig, use_container_width=True)
 
                 col_val, col_tec, col_risk = st.columns(3)
@@ -75,15 +87,16 @@ with aba1:
                     st.write(f"**Graham:** R$ {res['p_graham']:.2f}"); st.write(f"**Bazin:** R$ {res['p_bazin']:.2f}"); st.write(f"**Gordon:** R$ {res['p_gordon']:.2f}")
                 with col_tec:
                     st.subheader("📈 Técnico")
-                    st.write(f"**Média 252:** R$ {res['ma252']:.2f}"); st.write(f"**Resistência:** R$ {res['resistencia']:.2f}")
+                    st.write(f"**Suporte:** R$ {res['suporte']:.2f}"); st.write(f"**Resistência:** R$ {res['resistencia']:.2f}")
                 with col_risk:
-                    st.subheader("🛡️ Gestão de Risco")
+                    st.subheader("🛡️ Risco")
                     st.error(f"**Stop Loss:** R$ {res['stop_loss']:.2f}"); st.success(f"**Stop Gain:** R$ {res['stop_gain']:.2f}")
     except Exception as e:
-        st.error(f"Erro: {e}")
+        st.error(f"Erro na Aba 1: {e}")
 
-with aba2:
-    st.header("🏙️ Scanner com Veredito de Compra/Venda")
+# --- ABA 2: SCANNER DE FIIS ---
+with tab2:
+    st.header("🏙️ Scanner FII - Segmento & Veredito Seguro")
     try:
         df_fii = pd.read_csv("statusinvest-busca-avancada.csv", sep=";", encoding="utf-8")
         def cl(n): return pd.to_numeric(df_fii[n].astype(str).str.replace('.','').str.replace(',','.'), errors='coerce')
@@ -92,33 +105,29 @@ with aba2:
         df_fii['DY_N'] = cl('DY')
         df_fii['PRECO_N'] = cl('PRECO')
         df_fii['LIQ_N'] = cl('LIQUIDEZ MEDIA DIARIA')
-        
-        # Valuation Bazin para a lista
+        if 'SEGMENTO' not in df_fii.columns: df_fii['SEGMENTO'] = "Indefinido"
+
+        # Cálculos de Valuation
         df_fii['Preço Teto Bazin'] = (df_fii['PRECO_N'] * (df_fii['DY_N'] / 100)) / 0.06
         df_fii['Margem Seg. (%)'] = ((df_fii['Preço Teto Bazin'] / df_fii['PRECO_N']) - 1) * 100
         
-        # Filtro Ricardo 
-        f = df_fii[(df_fii['P/VP_N'] >= 0.85) & (df_fii['P/VP_N'] <= 1.05) & (df_fii['LIQ_N'] >= 700000)].copy()
+        # Filtros: Liquidez > 800k e P/VP até 1.1
+        f = df_fii[(df_fii['LIQ_N'] >= 800000) & (df_fii['P/VP_N'] <= 1.1)].copy()
         
-        # --- APLICAÇÃO DO VEREDITO INTELIGENTE ---
-        f['VEREDITO'] = f.apply(gerar_veredito_fii, axis=1)
-        
-        # Organização final
+        f['VEREDITO'] = f.apply(gerar_veredito_seguro, axis=1)
         f = f.sort_values(by='Margem Seg. (%)', ascending=False)
 
-        st.write(f"🔍 Analisando **{len(f)}** ativos filtrados...")
-        
         st.dataframe(f[[
-            'TICKER', 'VEREDITO', 'PRECO', 'P/VP', 'DY', 
-            'Preço Teto Bazin', 'Margem Seg. (%)'
-        ]].style.format({'Preço Teto Bazin': '{:.2f}', 'Margem Seg. (%)': '{:.2f}%'}))
-        
-        st.info("💡 A análise de veredito combina P/VP abaixo de 1.0 com Yield sustentável pelo modelo de Bazin.")
+            'TICKER', 'SEGMENTO', 'VEREDITO', 'PRECO', 'P/VP', 'DY', 'Margem Seg. (%)'
+        ]].style.format({'Margem Seg. (%)': '{:.2f}%', 'Preço Teto Bazin': '{:.2f}'}))
 
     except Exception as e:
-        st.info("Coloque o CSV na pasta.")
+        st.info(f"Certifique-se de que 'statusinvest-busca-avancada.csv' está na pasta. Erro: {e}")
 
-with aba3:
-    st.header("🛡️ Gestão PGBL")
-    r = st.number_input("Renda Bruta Anual:", value=200000.0)
-    st.metric("Teto Isenção PGBL (12%)", f"R$ {r*0.12:.2f}")
+# --- ABA 3: PGBL ---
+with tab3:
+    st.header("🛡️ Planejamento Fiscal PGBL")
+    r = st.number_input("Sua Renda Bruta Anual Total:", value=200000.0, step=1000.0)
+    aporte_ideal = r * 0.12
+    st.metric("Aporte Máximo com Isenção (12%)", f"R$ {aporte_ideal:.2f}")
+    st.write(f"Para abater o máximo de IR, você deve aportar até **R$ {aporte_ideal:.2f}** em um plano PGBL este ano.")
