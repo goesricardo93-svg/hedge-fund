@@ -6,6 +6,24 @@ import plotly.graph_objects as go
 
 st.set_page_config(page_title="Terminal Ricardo - Hedge Fund", layout="wide")
 
+# Função para automatizar a análise que fizemos no chat
+def gerar_veredito_fii(row):
+    try:
+        margem = row['Margem Seg. (%)']
+        pvp = row['P/VP_N']
+        dy = row['DY_N']
+        
+        if pvp < 0.93 and margem > 10 and dy > 0.7:
+            return "🔥 COMPRA FORTE (Desconto + Yield)"
+        elif pvp <= 1.0 and margem > 0:
+            return "✅ COMPRA (Preço Justo)"
+        elif pvp > 1.05:
+            return "⚠️ AGUARDAR (Acima do VP)"
+        else:
+            return "🟡 NEUTRO"
+    except:
+        return "Analisando..."
+
 @st.cache_data(ttl=600)
 def carregar_dados_completos(ticker):
     try:
@@ -65,46 +83,40 @@ with aba1:
         st.error(f"Erro: {e}")
 
 with aba2:
-    st.header("🏙️ Scanner Estratégico de FIIs")
+    st.header("🏙️ Scanner com Veredito de Compra/Venda")
     try:
         df_fii = pd.read_csv("statusinvest-busca-avancada.csv", sep=";", encoding="utf-8")
         def cl(n): return pd.to_numeric(df_fii[n].astype(str).str.replace('.','').str.replace(',','.'), errors='coerce')
         
-        # Limpeza e Conversão
         df_fii['P/VP_N'] = cl('P/VP')
         df_fii['DY_N'] = cl('DY')
         df_fii['PRECO_N'] = cl('PRECO')
         df_fii['LIQ_N'] = cl('LIQUIDEZ MEDIA DIARIA')
         
-        # --- CÁLCULOS DE VALUATION (BAZIN) NO SCANNER ---
-        # Bazin para FIIs: (Dividendos últimos 12 meses) / 0.06 (ou o yield que você desejar)
-        # Como o StatusInvest dá o DY em %, fazemos: (Preço * DY) / 6%
+        # Valuation Bazin para a lista
         df_fii['Preço Teto Bazin'] = (df_fii['PRECO_N'] * (df_fii['DY_N'] / 100)) / 0.06
         df_fii['Margem Seg. (%)'] = ((df_fii['Preço Teto Bazin'] / df_fii['PRECO_N']) - 1) * 100
         
-        # Filtro Ricardo (P/VP entre 0.85 e 1.0 + Liquidez)
-        f = df_fii[(df_fii['P/VP_N'] >= 0.85) & (df_fii['P/VP_N'] <= 1.0) & (df_fii['LIQ_N'] >= 800000)].copy()
+        # Filtro Ricardo 
+        f = df_fii[(df_fii['P/VP_N'] >= 0.85) & (df_fii['P/VP_N'] <= 1.05) & (df_fii['LIQ_N'] >= 700000)].copy()
         
-        # Stops e Suportes para a planilha
-        f['Suporte (Mín)'] = f['PRECO_N'] * 0.95
-        f['Stop Loss'] = f['PRECO_N'] * 0.92
-
-        # Ordenar pelos que têm mais margem de segurança
+        # --- APLICAÇÃO DO VEREDITO INTELIGENTE ---
+        f['VEREDITO'] = f.apply(gerar_veredito_fii, axis=1)
+        
+        # Organização final
         f = f.sort_values(by='Margem Seg. (%)', ascending=False)
 
-        st.write(f"🔍 Encontrados **{len(f)}** FIIs com P/VP entre 0.85 e 1.00.")
+        st.write(f"🔍 Analisando **{len(f)}** ativos filtrados...")
         
-        # Exibição da Tabela com Valuation
         st.dataframe(f[[
-            'TICKER', 'PRECO', 'P/VP', 'DY', 
-            'Preço Teto Bazin', 'Margem Seg. (%)', 
-            'Suporte (Mín)', 'Stop Loss'
+            'TICKER', 'VEREDITO', 'PRECO', 'P/VP', 'DY', 
+            'Preço Teto Bazin', 'Margem Seg. (%)'
         ]].style.format({'Preço Teto Bazin': '{:.2f}', 'Margem Seg. (%)': '{:.2f}%'}))
         
-        st.caption("⚠️ O cálculo de Bazin utiliza o DY atual projetado sobre o Yield de 6%.")
+        st.info("💡 A análise de veredito combina P/VP abaixo de 1.0 com Yield sustentável pelo modelo de Bazin.")
 
     except Exception as e:
-        st.info("Carregue o CSV do StatusInvest na pasta do projeto.")
+        st.info("Coloque o CSV na pasta.")
 
 with aba3:
     st.header("🛡️ Gestão PGBL")
