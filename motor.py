@@ -18,19 +18,21 @@ class MotorAnalise:
         df['close'] = df['close'].ffill()
         
         # Cálculos Base
-        ma252 = df['close'].rolling(window=self.p_longo).mean().iloc[-1]
+        ma252_serie = df['close'].rolling(window=self.p_longo).mean()
+        ma252 = ma252_serie.iloc[-1]
         rsi14 = self.calcular_rsi(df['close'], self.p_curto).iloc[-1]
+        rsi252 = self.calcular_rsi(df['close'], self.p_longo).iloc[-1]
+        
         preco_atual = float(df['close'].iloc[-1])
         resistencia = float(df['close'].tail(self.p_longo).max())
         suporte = float(df['close'].tail(self.p_longo).min())
         
         # Lógica de Recomendação Objetiva
         tendencia_alta = preco_atual > ma252
-        distancia_suporte = (preco_atual / suporte) - 1
         
         if tendencia_alta:
             if rsi14 < 45:
-                recomendacao = "COMPRA FORTE (Correção na Tendência)"
+                recomendacao = "COMPRA (Correção na Tendência)"
                 cor = "green"
             elif rsi14 > 75:
                 recomendacao = "AGUARDAR (Ativo Esticado)"
@@ -40,7 +42,7 @@ class MotorAnalise:
                 cor = "blue"
         else:
             if rsi14 > 60:
-                recomendacao = "VENDA/PROTEÇÃO (Repique na Baixa)"
+                recomendacao = "VENDA (Repique na Baixa)"
                 cor = "red"
             else:
                 recomendacao = "FORA (Tendência de Baixa)"
@@ -48,13 +50,16 @@ class MotorAnalise:
 
         # Fibonacci
         diff = resistencia - suporte
-        fib = {"61.8%": round(resistencia - (0.382 * diff), 2), 
-               "50.0%": round(resistencia - (0.5 * diff), 2), 
-               "38.2%": round(resistencia - (0.618 * diff), 2)}
+        fib = {
+            "61.8%": round(resistencia - (0.382 * diff), 2),
+            "50.0%": round(resistencia - (0.5 * diff), 2),
+            "38.2%": round(resistencia - (0.618 * diff), 2)
+        }
 
         return {
             "preco": round(preco_atual, 2),
             "rsi_14": round(rsi14, 2),
+            "rsi_252": round(rsi252, 2),
             "ma252": round(ma252, 2),
             "tendencia": "ALTA" if tendencia_alta else "BAIXA",
             "recomendacao": recomendacao,
