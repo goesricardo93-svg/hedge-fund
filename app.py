@@ -5,11 +5,10 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 
-# 1. CONFIGURAÇÃO E BASE DE DADOS INTEGRAL
-st.set_page_config(page_title="Hedge Fund Ricardo - Terminal v1.0", layout="wide")
+# 1. SETUP E CARTEIRA INTEGRAL (31 ATIVOS)
+st.set_page_config(page_title="Hedge Fund Ricardo - Terminal Pro", layout="wide")
 
 if 'meus_ativos' not in st.session_state:
-    # Lista integral dos 31 ativos com PM original
     st.session_state.meus_ativos = pd.DataFrame([
         {"Ticker": "ALZR11.SA", "Qtd": 100, "PM": 10.81}, {"Ticker": "BBAS3.SA", "Qtd": 1703, "PM": 24.48},
         {"Ticker": "BBSE3.SA", "Qtd": 55, "PM": 35.64}, {"Ticker": "BTCI11.SA", "Qtd": 502, "PM": 10.16},
@@ -29,153 +28,77 @@ if 'meus_ativos' not in st.session_state:
         {"Ticker": "XPML11.SA", "Qtd": 10, "PM": 106.05}
     ])
 
-# 2. FUNÇÕES DE SUPORTE E CÁLCULO
+# 2. FUNÇÕES TÉCNICAS
 @st.cache_data(ttl=600)
-def carregar_dados(tk):
+def load_data(tk):
     try:
         obj = yf.Ticker(tk)
         return obj.history(period="2y"), obj.info
     except: return pd.DataFrame(), {}
 
-def veredito_fii_scanner(row):
+def veredito_fii(row):
     try:
         p_vp = row.get('P/VP_N', 0)
-        margem = row.get('Margem Seg. (%)', 0)
-        segmento = str(row.get('SEGMENTO', 'N/A')).upper()
-        vacancia = row.get('VACANCIA_N', 0)
-        if "PAPEL" in segmento:
-            return "🔥 COMPRA SEGURA (Papel)" if 0.97 <= p_vp <= 1.00 else "🟡 ANALISAR"
-        if vacancia and vacancia > 15:
-            return "❌ EVITAR (Vacância Alta)"
-        if p_vp < 0.95 and margem > 5:
-            return "🏢 OPORTUNIDADE (Tijolo)"
-        return "✅ COMPRA"
-    except: return "Análise Manual"
-
-def recomendacao_carteira(tk, pr, pm, info):
-    try:
-        p_vp = info.get('priceToBook', 0) or 0
-        dy = info.get('dividendYield', 0) or 0
-        teto_bazin = (pr * dy) / 0.06 if dy > 0 else 0
-        if "11" in tk:
-            if p_vp < 0.96: return "🔥 APORTAR (Desconto)"
-            if p_vp > 1.05: return "⚠️ CARO (Aguardar)"
-            return "✅ MANTER"
-        else:
-            if pr < teto_bazin: return "💰 OPORTUNIDADE (Bazin)"
-            if pr > pm * 1.2: return "🚀 ALTA (Manter)"
-            return "✅ EM VALOR"
+        # Tenta pegar a coluna de vacância mesmo se o nome variar no CSV
+        vac = row.get('VACANCIA FISICA', row.get('VACANCIA', 0))
+        if p_vp < 0.95: return "🔥 OPORTUNIDADE"
+        if p_vp > 1.05: return "⚠️ CARO"
+        return "✅ MANTÉM"
     except: return "---"
 
-# 3. INTERFACE PRINCIPAL
-st.sidebar.header("🕹️ Comando Central")
-tk_raw = st.sidebar.text_input("Consultar Ticker:", value="BBSE3")
-tk_final = tk_raw.strip().upper() if "." in tk_raw else f"{tk_raw.strip().upper()}.SA"
+def recomendacao_final(tk, preco, pm, info):
+    dy = info.get('dividendYield', 0) or 0
+    teto = (preco * dy) / 0.06 if dy > 0 else 0
+    if preco < pm and (teto == 0 or preco < teto): return "💰 COMPRAR (Abaixo PM)"
+    if teto > 0 and preco > teto * 1.15: return "⚠️ VENDER / CARO"
+    return "✅ MANTÉM"
 
-t1, t2, t3, t4 = st.tabs(["📊 Inteligência", "🏙️ Scanner FIIs", "🛡️ PGBL", "💼 MINHA CARTEIRA"])
+# 3. INTERFACE
+st.sidebar.title("Comando Ricardo")
+q_tk = st.sidebar.text_input("Ticker:", value="BBSE3").strip().upper()
+tk = q_tk if "." in q_tk else f"{q_tk}.SA"
 
-# --- ABA 1: INTELIGÊNCIA ---
+t1, t2, t3, t4 = st.tabs(["📊 Inteligência", "🏙️ Scanner FIIs", "🛡️ PGBL", "💼 CARTEIRA"])
+
 with t1:
-    df_h, info = carregar_dados(tk_final)
-    if not df_h.empty:
-        res = MotorAnalise().analisar(df_h, info, tk_final)
-        if res:
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Preço Atual", f"R$ {res['preco']:.2f}")
-            c2.metric("Alvo (Stop Gain)", f"R$ {res['stop_gain']:.2f}")
-            c3.metric("P. Teto (Bazin)", f"R$ {res['p_bazin']:.2f}", f"{res['upside']:.1f}%")
-            c4.metric("RSI (14d)", f"{res['rsi']:.1f}")
-            
-            st.markdown(f"### Veredito: :{res['cor']}[{res['recomendacao']}]")
-            
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=df_h.index, y=df_h['Close'], name='PREÇO', line=dict(color='#29b5e8', width=3)))
-            fig.add_trace(go.Scatter(x=df_h.index, y=[res['suporte']]*len(df_h), name='🛡️ SUPORTE', line=dict(color='#2ecc71', dash='dash')))
-            fig.add_trace(go.Scatter(x=df_h.index, y=[res['stop_loss']]*len(df_h), name='🚫 STOP LOSS', line=dict(color='#e74c3c', dash='dot')))
-            fig.add_trace(go.Scatter(x=df_h.index, y=[res['stop_gain']]*len(df_h), name='🎯 ALVO', line=dict(color='#f1c40f', dash='dashdot')))
-            fig.update_layout(height=450, margin=dict(l=0,r=0,b=0,t=40), legend=dict(orientation="h", y=1.1, x=0.5, xanchor="center"))
-            st.plotly_chart(fig, use_container_width=True)
-            
-            st.markdown("---")
-            col_v, col_t, col_r = st.columns(3)
-            with col_v:
-                st.subheader("🏛️ Valuation")
-                st.write(f"**Graham:** R$ {res['p_graham']:.2f}")
-                st.write(f"**Bazin:** R$ {res['p_bazin']:.2f}")
-                st.write(f"**Gordon:** R$ {res['p_gordon']:.2f}")
-            with col_t:
-                st.subheader("📈 Técnico")
-                st.write(f"**Suporte:** R$ {res['suporte']:.2f}")
-                st.write(f"**Resistência:** R$ {res['resistencia']:.2f}")
-                st.write(f"**Tendência:** {res['tendencia']}")
-            with col_r:
-                st.subheader("🛡️ Risco")
-                st.error(f"**Stop Loss:** R$ {res['stop_loss']:.2f}")
-                st.success(f"**Stop Gain:** R$ {res['stop_gain']:.2f}")
-                st.write(f"**Dívida/EBITDA:** {info.get('debtToEbitda', 0):.2f}")
+    hist, info = load_data(tk)
+    if not hist.empty:
+        r = MotorAnalise().analisar(hist, info, tk)
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Preço", f"R$ {r['preco']:.2f}")
+        c2.metric("Alvo", f"R$ {r['stop_gain']:.2f}")
+        c3.metric("ROE", f"{info.get('returnOnEquity', 0)*100:.1f}%")
+        c4.metric("Margem Líq.", f"{info.get('profitMargins', 0)*100:.1f}%")
+        c5.metric("P. Bazin", f"R$ {r['p_bazin']:.2f}")
+        
+        st.subheader(f"Veredito: :{r['cor']}[{r['recomendacao']}]")
+        
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'], name='Preço'))
+        fig.add_trace(go.Scatter(x=hist.index, y=[r['stop_gain']]*len(hist), name='ALVO', line=dict(dash='dash', color='gold')))
+        st.plotly_chart(fig, use_container_width=True)
 
-# --- ABA 2: SCANNER FIIS ---
 with t2:
-    st.header("🏙️ Scanner FII - Stress Test")
+    st.header("Análise de FIIs")
     try:
-        try: df_f = pd.read_csv("statusinvest-busca-avancada.csv", sep=";", encoding="utf-8")
-        except: df_f = pd.read_csv("statusinvest-busca-avancada.csv", sep=";", encoding="iso-8859-1")
-        
-        def limpar_coluna(n):
-            if n in df_f.columns:
-                return pd.to_numeric(df_f[n].astype(str).str.replace('.','').str.replace(',','.'), errors='coerce')
-            return None
-        
-        df_f['P/VP_N'] = limpar_coluna('P/VP')
-        df_f['DY_N'] = limpar_coluna('DY')
-        df_f['PRECO_N'] = limpar_coluna('PRECO')
-        df_f['LIQ_N'] = limpar_coluna('LIQUIDEZ MEDIA DIARIA')
-        df_f['VACANCIA_N'] = limpar_coluna('VACANCIA FISICA')
-        
-        df_f['Preço Teto Bazin'] = (df_f['PRECO_N'] * (df_f['DY_N'] / 100)) / 0.06
-        df_f['Margem Seg. (%)'] = ((df_f['Preço Teto Bazin'] / df_f['PRECO_N']) - 1) * 100
-        
-        filt = df_f[(df_f['P/VP_N'] >= 0.85) & (df_f['P/VP_N'] <= 1.05) & (df_f['LIQ_N'] >= 500000)].copy()
-        if not filt.empty:
-            filt['ANÁLISE'] = filt.apply(veredito_fii_scanner, axis=1)
-            st.dataframe(filt[['TICKER', 'ANÁLISE', 'P/VP', 'DY', 'VACANCIA FISICA', 'Margem Seg. (%)']].sort_values('Margem Seg. (%)', ascending=False))
-        else: st.warning("Nenhum FII nos critérios técnicos.")
-    except Exception as e: st.error(f"Erro ao ler CSV: {e}")
+        df = pd.read_csv("statusinvest-busca-avancada.csv", sep=";", encoding="latin-1")
+        # Limpeza para evitar erro de index
+        df.columns = [c.strip().upper() for c in df.columns]
+        df['P/VP_N'] = pd.to_numeric(df['P/VP'].astype(str).str.replace(',','.'), errors='coerce')
+        df['RECOMENDAÇÃO'] = df.apply(veredito_fii, axis=1)
+        st.dataframe(df[['TICKER', 'RECOMENDAÇÃO', 'P/VP']].head(20))
+    except Exception as e: st.error(f"Erro no CSV: {e}")
 
-# --- ABA 3: PGBL ---
-with t3:
-    st.header("🛡️ Planejamento Fiscal")
-    r_anual = st.number_input("Renda Bruta Anual:", value=200000.0)
-    st.metric("Aporte Máximo Isenção (12%)", f"R$ {r_anual * 0.12:,.2f}")
-
-# --- ABA 4: CARTEIRA INTELIGENTE ---
 with t4:
-    st.header("💼 Gestão de Patrimônio Ricardo")
-    df_ed = st.data_editor(st.session_state.meus_ativos, num_rows="dynamic", use_container_width=True)
-    st.session_state.meus_ativos = df_ed
-    
-    if st.button("🔄 Sincronizar e Analisar Carteira"):
-        with st.spinner("Analisando mercado e gerando recomendações..."):
-            res_carteira = []
-            for _, row in df_ed.iterrows():
-                t = yf.Ticker(row['Ticker'])
-                preco = t.fast_info['lastPrice']
-                rec = recomendacao_carteira(row['Ticker'], preco, row['PM'], t.info)
-                res_carteira.append({'Preço Atual': preco, 'Recomendação': rec})
-            
-            df_final = pd.concat([df_ed, pd.DataFrame(res_carteira)], axis=1)
-            df_final['Total'] = df_final['Qtd'] * df_final['Preço Atual']
-            df_final['Lucro'] = (df_final['Preço Atual'] - df_final['PM']) * df_final['Qtd']
-            
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Patrimônio Total", f"R$ {df_final['Total'].sum():,.2f}")
-            m2.metric("Lucro/Prejuízo Absoluto", f"R$ {df_final['Lucro'].sum():,.2f}")
-            
-            c_p1, c_p2 = st.columns(2)
-            with c_p1: st.plotly_chart(px.pie(df_final, values='Total', names='Ticker', title="Distribuição de Ativos"), use_container_width=True)
-            with c_p2: st.plotly_chart(px.bar(df_final.sort_values('Lucro'), x='Ticker', y='Lucro', color='Recomendação', title="Performance por Ativo"), use_container_width=True)
-            
-            st.dataframe(df_final.style.applymap(
-                lambda x: 'background-color: #27ae60' if 'APORTAR' in str(x) or 'OPORTUNIDADE' in str(x) else ('background-color: #c0392b' if 'CARO' in str(x) else ''),
-                subset=['Recomendação']
-            ))
+    st.header("Minha Carteira - Gestão de Ativos")
+    df_edit = st.data_editor(st.session_state.meus_ativos, num_rows="dynamic")
+    if st.button("🚀 Analisar e Gerar Recomendações"):
+        res = []
+        for _, row in df_edit.iterrows():
+            obj = yf.Ticker(row['Ticker'])
+            p_atual = obj.fast_info['last_price']
+            rec = recomendacao_final(row['Ticker'], p_atual, row['PM'], obj.info)
+            res.append({"Atual": p_atual, "Recomendação": rec, "Lucro/Prej": (p_atual - row['PM']) * row['Qtd']})
+        
+        df_f = pd.concat([df_edit, pd.DataFrame(res)], axis=1)
+        st.dataframe(df_f.style.applymap(lambda x: 'color: green' if 'COMPRAR' in str(x) else ('color: red' if 'VENDER' in str(x) else ''), subset=['Recomendação']))
