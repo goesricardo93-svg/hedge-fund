@@ -34,20 +34,26 @@ class MotorAnalise:
         preco_teto = np.mean(vals) if vals else preco_atual
         upside_perc = ((preco_teto / preco_atual) - 1) * 100
 
-        # --- RECOMENDAÇÃO (Filtro RSI) ---
-        tendencia = "ALTA" if preco_atual > ma252 else "BAIXA"
-        if preco_atual < preco_teto and rsi14 < 40:
-            rec, cor = "COMPRA FORTE (Oportunidade Rara)", "green"
-        elif preco_atual < preco_teto:
-            rec, cor = "COMPRA (Abaixo do Teto)", "green"
-        elif rsi14 > 70:
-            rec, cor = "VENDA/ALERTA (Sobrecomprado)", "red"
-        else:
-            rec, cor = "AGUARDAR/MANTER", "blue"
-
+        # --- SUPORTE / RESISTÊNCIA / FIBO ---
         max_252 = float(df['close'].tail(252).max())
         min_252 = float(df['close'].tail(252).min())
         diff = max_252 - min_252
+
+        # --- STOP TÉCNICO (Suporte Anual - 2% de folga) ---
+        # Se o preço atual já estiver muito perto do suporte, 
+        # usamos 5% do preço atual como trava de segurança mínima.
+        stop_tecnico = min_252 * 0.98 
+        if stop_tecnico > (preco_atual * 0.95):
+            stop_tecnico = preco_atual * 0.93 # Fallback para 7% se o suporte estiver colado
+
+        # --- RECOMENDAÇÃO ---
+        tendencia = "ALTA" if preco_atual > ma252 else "BAIXA"
+        if preco_atual < preco_teto and rsi14 < 45:
+            rec, cor = "COMPRA FORTE (Teto + RSI)", "green"
+        elif preco_atual < preco_teto:
+            rec, cor = "COMPRA (Abaixo do Teto)", "green"
+        else:
+            rec, cor = "AGUARDAR (Fora de Faixa)", "blue"
 
         return {
             "preco": round(preco_atual, 2),
@@ -63,8 +69,8 @@ class MotorAnalise:
             "upside": round(upside_perc, 2),
             "suporte": round(min_252, 2),
             "resistencia": round(max_252, 2),
-            "stop_loss": round(preco_atual * 0.97, 2),
-            "stop_gain": round(preco_atual * 1.06, 2),
+            "stop_loss": round(stop_tecnico, 2),
+            "stop_gain": round(preco_teto, 2), # O alvo agora é o Preço Teto
             "fibonacci": {
                 "61.8%": round(max_252 - (0.382 * diff), 2),
                 "50.0%": round(max_252 - (0.5 * diff), 2),
