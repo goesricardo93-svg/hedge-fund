@@ -14,73 +14,72 @@ class MotorAnalise:
         return 100 - (100 / (1 + rs))
 
     def analisar(self, df_prices, info=None, ticker=""):
-        # Se for MultiIndex, extrai apenas a coluna do ticker
+        # Limpeza do MultiIndex do yfinance
         if isinstance(df_prices.columns, pd.MultiIndex):
             df = df_prices.xs(ticker, level=1, axis=1)
         else:
             df = df_prices
 
-        if df.empty or len(df) < 5: return None
+        if df.empty: return None
         
-        # Garante que temos a coluna Close
         precos = df['Close'].ffill().dropna()
-        if precos.empty: return None
-
         preco_atual = float(precos.iloc[-1])
+        
+        # --- INDICADORES TÉCNICOS ---
         ma252 = precos.rolling(window=min(len(precos), self.p_longo)).mean().iloc[-1]
         rsi14 = self.calcular_rsi(precos, self.p_curto).iloc[-1]
+        suporte = float(precos.tail(252).min())
+        tendencia = "ALTA" if preco_atual > ma252 else "BAIXA"
+
+        # --- FUNDAMENTALISTAS (Bazin, Graham, Gordon) ---
+        # Buscando dividendos em múltiplas fontes do Yahoo
+        dpa = info.get('dividendRate') or info.get('trailingAnnualDividendRate') or 0
+        lpa = info.get('trailingEps') or 0
+        vpa = info.get('bookValue') or 0
         
+        # Graham
+        p_graham = np.sqrt(max(0, 22.5 * lpa * vpa)) if (lpa > 0 and vpa > 0) else 0
+        # Bazin (6%)
+        p_bazin = dpa / 0.06 if dpa > 0 else 0
+        
+        # Preço Teto Consolidado (Média Graham e Bazin para ações)
         is_etf = ".L" in ticker or (info and info.get('quoteType') == 'ETF')
         is_fii = ticker.endswith('11.SA') and not is_etf
-
-        # Captura de dados fundamentalistas
-        lpa = info.get('trailingEps', 0) if info else 0
-        vpa = info.get('bookValue', 0) if info else 0
-        # Dividendos: tenta várias chaves que o Yahoo pode usar
-        dpa = info.get('dividendRate') or info.get('trailingAnnualDividendRate') or 0
         
-        preco_teto = 0
-        tipo_label = "AÇÃO"
-
         if is_etf:
-            tipo_label = "UCITS (IRLANDA)"
+            preco_teto = 0 # UCITS são de acúmulo
         elif is_fii:
-            tipo_label = "FII"
-            preco_teto = dpa / 0.06 if dpa > 0 else 0
+            preco_teto = p_bazin # FIIs foca em Bazin
         else:
-            p_graham = np.sqrt(max(0, 22.5 * lpa * vpa)) if (lpa > 0 and vpa > 0) else 0
-            p_bazin = dpa / 0.06 if dpa > 0 else 0
-            # Se tiver os dois, faz a média. Se tiver só um, usa ele.
             vals = [v for v in [p_graham, p_bazin] if v > 0]
             preco_teto = np.mean(vals) if vals else 0
 
-        tendencia_alta = preco_atual > ma252
-        sobrecomprado = rsi14 > 68
-        sobrevendido = rsi14 < 35
-        margem_seg = (preco_teto > preco_atual * 1.05) if preco_teto > 0 else False
+        # Margem de Segurança
+        margem = ((preco_teto / preco_atual) - 1) * 100 if preco_teto > 0 else 0
 
-        # Recomendação
+        # --- RECOMENDAÇÃO ---
         if is_etf:
-            if sobrevendido: rec, cor = "COMPRA (ETF Descontado)", "green"
-            elif sobrecomprado: rec, cor = "AGUARDAR (ETF Esticado)", "yellow"
-            else: rec, cor = "MANTER (Tendência Segue)", "blue" if tendencia_alta else "gray"
+            if rsi14 < 35: rec, cor = "COMPRA (RSI Baixo)", "green"
+            elif rsi14 > 68: rec, cor = "AGUARDAR (RSI Esticado)", "yellow"
+            else: rec, cor = f"MANTER ({tendencia})", "blue"
         else:
-            if margem_seg and tendencia_alta and not sobrecomprado:
-                rec, cor = f"COMPRA SEGURA ({tipo_label})", "green"
-            elif sobrecomprado:
-                rec, cor = "AGUARDAR (Preço Esticado)", "yellow"
-            elif not tendencia_alta and not margem_seg:
-                rec, cor = "FORA / VENDA (Risco Alto)", "red"
+            if preco_teto > preco_atual * 1.1 and tendencia == "ALTA" and rsi14 < 65:
+                rec, cor = "COMPRA SEGURA", "green"
+            elif rsi14 > 70 or preco_atual > preco_teto:
+                rec, cor = "CARO / AGUARDAR", "yellow"
             else:
-                rec, cor = "NEUTRO / AGUARDAR", "gray"
+                rec, cor = "NEUTRO", "gray"
 
         return {
-            "tipo": tipo_label,
             "preco": preco_atual,
             "rsi": rsi14,
+            "ma252": ma252,
+            "suporte": suporte,
+            "tendencia": tendencia,
+            "preco_teto": preco_teto,
+            "upside": margem,
             "recomendacao": rec,
             "cor": cor,
-            "preco_teto": preco_teto,
-            "suporte": float(precos.tail(252).min()),
-            "precos_serie": precos # Retorna a série limpa para o gráfico
+            "precos_serie": precos,
+            "tipo": "ETF" if is_etf else ("FII" if is_fii else "AÇÃO")
         }
