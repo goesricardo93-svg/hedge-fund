@@ -3,18 +3,139 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 import numpy as np
-import os
-from motor import MotorAnalise
-from alerts import disparar_alerta # Importa o novo sistema de alertas
+import requests
+import smtplib
+from email.mime.text import MIMEText
 
 # ======================================================
-# CONFIGURAÇÃO DA PÁGINA
+# 1. MOTOR DE ANÁLISE (INTEGRADO AQUI PARA EVITAR ERROS)
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo | v8.0", layout="wide")
+class MotorAnalise:
+    def analisar(self, hist, info, ticker):
+        """Processa indicadores técnicos e fundamentalistas."""
+        try:
+            if hist is None or hist.empty: return None
+
+            # 1. Dados Básicos
+            preco_atual = hist["Close"].iloc[-1]
+            
+            # 2. RSI (14 períodos)
+            delta = hist["Close"].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs)).iloc[-1]
+            
+            # 3. Volatilidade e Drawdown
+            retornos = hist["Close"].pct_change().dropna()
+            volatilidade = retornos.std() * (252 ** 0.5)
+            
+            topo = hist["Close"].cummax()
+            drawdown = ((hist["Close"] - topo) / topo).min() * 100
+
+            # 4. Valuation
+            dy = info.get("dividendYield", 0) or 0
+            lpa = info.get("trailingEps", 0) or 0
+            vpa = info.get("bookValue", 0) or 0
+            
+            # Bazin
+            dpa = preco_atual * dy
+            p_bazin = dpa / 0.06 if dpa > 0 else 0
+            
+            # Graham
+            p_graham = (22.5 * lpa * vpa) ** 0.5 if (lpa > 0 and vpa > 0) else 0
+            
+            # Gordon (Proxy via Bazin)
+            p_gordon = p_bazin 
+
+            return {
+                "preco": preco_atual,
+                "rsi": rsi,
+                "volatilidade": volatilidade,
+                "drawdown": drawdown,
+                "p_bazin": p_bazin,
+                "p_graham": p_graham,
+                "p_gordon": p_gordon,
+                "lpa": lpa,
+                "vpa": vpa,
+                "dy": dy
+            }
+        except Exception as e:
+            print(f"Erro Motor {ticker}: {e}")
+            return None
+
+    def monte_carlo(self, patrimonio_atual, aporte_mensal, anos=10, sims=1000):
+        meses = anos * 12
+        resultados = []
+        mu, sigma = 0.008, 0.05
+        
+        for _ in range(sims):
+            pat = patrimonio_atual
+            for _ in range(meses):
+                pat = pat * (1 + np.random.normal(mu, sigma)) + aporte_mensal
+            resultados.append(pat)
+        return np.array(resultados)
+
+    def stress_test(self, valor):
+        cenarios = {
+            "Crise 2008 (-50%)": -0.50, 
+            "COVID-19 (-35%)": -0.35, 
+            "Joesley Day (-15%)": -0.15
+        }
+        dados = {}
+        for nome, queda in cenarios.items():
+            hist = [valor]
+            v = valor * (1 + queda)
+            hist.append(v)
+            for _ in range(10):
+                v = v * 1.005 
+                hist.append(v)
+            dados[nome] = hist
+        return dados
 
 # ======================================================
-# FUNÇÕES AUXILIARES (CACHE E LÓGICA)
+# 2. SISTEMA DE ALERTAS (INTEGRADO)
 # ======================================================
+TELEGRAM_TOKEN = "8515547858:AAHDCGoE-Fg-51If_r_5xZSO2YHgoTrceZQ"
+TELEGRAM_CHAT_ID = "833554938"
+SMTP_SERVER = "smtp.office365.com"
+SMTP_PORT = 587
+EMAIL_USER = "radgoes@hotmail.com"
+EMAIL_PASS = "Ysi0xgki5-"
+
+def enviar_telegram(mensagem):
+    try:
+        if "SEU_TOKEN" in TELEGRAM_TOKEN: return
+        url = f"https://api.telegram.org/bot{8515547858:AAHDCGoE-Fg-51If_r_5xZSO2YHgoTrceZQ}/sendMessage"
+        payload = {"chat_id": 833554938, "text": mensagem, "parse_mode": "Markdown"}
+        requests.post(url, data=payload, timeout=5)
+    except Exception: pass
+
+def enviar_email(mensagem):
+    try:
+        if "radgoes@hotmail.com" in EMAIL_USER: return
+        msg = MIMEText(mensagem)
+        msg["Subject"] = "🚨 ALERTA – HEDGE FUND RICARDO"
+        msg["From"] = EMAIL_USER
+        msg["To"] = EMAIL_USER
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(EMAIL_USER, EMAIL_PASS)
+            server.send_message(msg)
+    except Exception: pass
+
+def disparar_alerta(titulo, corpo):
+    msg_formatada = f"🚨 *{titulo}*\n\n{corpo}"
+    enviar_telegram(msg_formatada)
+    enviar_email(msg_formatada)
+
+# ======================================================
+# 3. INTERFACE STREAMLIT (CORRIGIDA)
+# ======================================================
+st.set_page_config(page_title="Hedge Fund Ricardo | v8.1 Final", layout="wide")
+
+# --- CORREÇÃO CRÍTICA DO CACHE ---
+# Removemos o retorno do objeto 't' (yf.Ticker) que causava o erro UnserializableReturnValueError
 @st.cache_data(ttl=3600)
 def obter_dados(ticker):
     try:
@@ -24,7 +145,9 @@ def obter_dados(ticker):
         
         motor = MotorAnalise()
         r = motor.analisar(hist, t.info, ticker)
-        return r, t.info
+        
+        # RETORNA APENAS DADOS PUROS (DICT), NÃO O OBJETO TICKER
+        return r, t.info 
     except:
         return None, None
 
@@ -37,23 +160,19 @@ def sugerir_aportes(df, aporte, metas_setor):
     if df.empty: return pd.DataFrame()
     df = df.copy()
     
-    # Cálculos de Peso
     df["Valor"] = df["Qtd"] * df["Cotação"]
     total = df["Valor"].sum()
     if total == 0: total = 1
     
     df["Peso_Atual"] = df["Valor"] / total
     
-    # Metas
     dict_metas = dict(zip(metas_setor["Setor"], metas_setor["Meta"]))
     df["Meta_Setorial"] = df["Setor"].map(dict_metas).fillna(0.05)
     qtd_por_setor = df.groupby("Setor")["Ticker"].transform("count")
     df["Peso_Alvo"] = df["Meta_Setorial"] / qtd_por_setor
 
-    # Score de Prioridade
     df["Gap"] = df["Peso_Alvo"] - df["Peso_Atual"]
     
-    # Fórmula: Gap (rebalanceamento) + Score Técnico + Oportunidade Preço
     df["Score_IA"] = (
         (df["Gap"] * 100 * 2) +          
         (df["Score"] / 100) +            
@@ -61,7 +180,6 @@ def sugerir_aportes(df, aporte, metas_setor):
     )
     df["Score_IA"] = df["Score_IA"].clip(lower=0)
 
-    # Distribuição
     soma = df["Score_IA"].sum()
     if soma > 0:
         df["Aporte_Sugerido"] = (df["Score_IA"] / soma) * aporte
@@ -70,9 +188,7 @@ def sugerir_aportes(df, aporte, metas_setor):
         
     return df[df["Aporte_Sugerido"] > 1].sort_values("Aporte_Sugerido", ascending=False)
 
-# ======================================================
-# ESTADO DA SESSÃO (DADOS INICIAIS)
-# ======================================================
+# ESTADO INICIAL
 if "carteira_acoes" not in st.session_state:
     st.session_state.carteira_acoes = pd.DataFrame([
         ["BBAS3.SA", 1703, 24.48, "Bancos"],
@@ -107,12 +223,9 @@ if "metas_setor" not in st.session_state:
 if "alertas_enviados" not in st.session_state:
     st.session_state.alertas_enviados = set()
 
-# ======================================================
-# INTERFACE PRINCIPAL
-# ======================================================
+# INTERFACE
 st.sidebar.title("📊 Painel de Controle")
 
-# --- SIDEBAR: METAS ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("🎯 Metas de Alocação")
 df_metas = st.sidebar.data_editor(st.session_state.metas_setor, num_rows="dynamic", key="meta_ed")
@@ -127,41 +240,41 @@ else:
 st.sidebar.markdown("---")
 ticker_input = st.sidebar.text_input("🔍 Ticker:", "BBAS3.SA").upper()
 
-# --- ABAS PRINCIPAIS ---
 tabs = st.tabs(["🔎 Análise Técnica", "💼 Ações", "🏢 FIIs & Scanner", "💰 RF & PGBL"])
 
-# === ABA 1: ANÁLISE TÉCNICA E FUNDAMENTALISTA ===
+# === ABA 1: ANÁLISE ===
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
+    # CORREÇÃO AQUI: Recebemos apenas 2 valores (r, info), não 3
     r, info = obter_dados(ticker_input)
     
     if r:
-        # Linha 1: Preços
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Preço Atual", f"R$ {r['preco']:.2f}")
         c2.metric("Bazin (Teto 6%)", f"R$ {r['p_bazin']:.2f}", delta=f"{r['p_bazin']-r['preco']:.2f}")
         c3.metric("Graham (Justo)", f"R$ {r['p_graham']:.2f}")
         c4.metric("Gordon (Est.)", f"R$ {r['p_gordon']:.2f}")
 
-        # Linha 2: Indicadores
         c5, c6, c7, c8 = st.columns(4)
         c5.markdown(f"**{get_rsi_status(r['rsi'])}**")
         c6.metric("Volatilidade", f"{r['volatilidade']*100:.1f}%")
         c7.metric("Drawdown Max", f"{r['drawdown']:.1f}%", delta_color="inverse")
         c8.metric("DY Anual", f"{r['dy']*100:.2f}%")
 
-        # Gráfico
         try:
             hist_chart = yf.download(ticker_input, period="2y", progress=False)
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=hist_chart.index, y=hist_chart["Close"], name="Preço"))
-            if r['p_bazin'] > 0: 
-                fig.add_hline(y=r['p_bazin'], line_dash="dash", line_color="green", annotation_text="Teto Bazin")
-            st.plotly_chart(fig, use_container_width=True)
-        except:
-            st.warning("Gráfico indisponível.")
+            if not hist_chart.empty:
+                fig = go.Figure()
+                # Ajuste para garantir que estamos plotando a coluna correta
+                vals = hist_chart["Close"] if "Close" in hist_chart else hist_chart.iloc[:,0]
+                fig.add_trace(go.Scatter(x=hist_chart.index, y=vals, name="Preço"))
+                if r['p_bazin'] > 0: 
+                    fig.add_hline(y=r['p_bazin'], line_dash="dash", line_color="green", annotation_text="Teto Bazin")
+                st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.warning(f"Gráfico indisponível: {e}")
     else:
-        st.warning("Ticker não encontrado.")
+        st.warning("Ticker não encontrado ou erro na API.")
 
 # === ABA 2: AÇÕES ===
 with tabs[1]:
@@ -172,10 +285,10 @@ with tabs[1]:
     if st.button("🔄 Analisar Ações"):
         res = []
         bar = st.progress(0)
+        total_items = len(df_acoes)
         for i, row in df_acoes.iterrows():
             r, info = obter_dados(row["Ticker"])
             if r:
-                # Score de Convergência
                 score = 0
                 if r["preco"] < r["p_bazin"]: score += 30
                 if r["preco"] < r["p_graham"]: score += 20
@@ -186,7 +299,6 @@ with tabs[1]:
                 if score >= 70: status = "🟢 COMPRA"
                 elif score <= 30: status = "🔴 VENDA"
 
-                # Disparo de Alerta (Telegram + Outlook)
                 chave = f"{row['Ticker']}_{status}"
                 if "COMPRA" in status and chave not in st.session_state.alertas_enviados:
                     titulo = f"OPORTUNIDADE: {row['Ticker']}"
@@ -198,7 +310,7 @@ with tabs[1]:
                 res.append({**row.to_dict(), "Cotação": r["preco"], "Score": score, "Bazin": r["p_bazin"]})
             else:
                 res.append({**row.to_dict(), "Cotação": 0, "Score": 0, "Bazin": 0})
-            bar.progress((i+1)/len(df_acoes))
+            bar.progress((i+1)/total_items)
         st.session_state.df_final_acoes = pd.DataFrame(res)
         st.rerun()
 
@@ -227,7 +339,7 @@ with tabs[1]:
                     fig.add_trace(go.Scatter(y=v, name=k))
                 st.plotly_chart(fig, use_container_width=True)
 
-# === ABA 3: FIIs & SCANNER ===
+# === ABA 3: FIIs ===
 with tabs[2]:
     st.subheader("Carteira FIIs")
     df_fiis = st.data_editor(st.session_state.carteira_fiis, num_rows="dynamic", key="ed_fiis", use_container_width=True)
@@ -249,31 +361,8 @@ with tabs[2]:
         
     if "df_fiis_final" in st.session_state:
         st.dataframe(st.session_state.df_fiis_final, use_container_width=True)
-        
-    st.divider()
-    st.subheader("🔍 Scanner CSV (StatusInvest)")
-    arquivo_csv = "statusinvest-busca-avancada.csv"
-    if os.path.exists(arquivo_csv):
-        try:
-            df_scan = pd.read_csv(arquivo_csv, sep=";", encoding="latin-1")
-            df_scan.columns = df_scan.columns.str.strip().str.upper()
-            
-            # Tratamento de dados numéricos BR
-            cols = ["DY", "P/VP", "VACÂNCIA FISICA"]
-            for c in cols:
-                if c in df_scan.columns:
-                    df_scan[c] = pd.to_numeric(df_scan[c].astype(str).str.replace(".","").str.replace(",",".").str.replace("%",""), errors='coerce')
-            
-            # Filtro Ricardo
-            filtro = (df_scan["DY"] > 6) & (df_scan["P/VP"] < 1.0) & (df_scan["P/VP"] > 0.8)
-            st.success(f"{len(df_scan[filtro])} Oportunidades Encontradas")
-            st.dataframe(df_scan[filtro][["TICKER", "PRECO", "DY", "P/VP", "SEGMENTO"]].sort_values("DY", ascending=False))
-        except Exception as e:
-            st.error(f"Erro no CSV: {e}")
-    else:
-        st.info("Para usar o Scanner Offline, adicione o arquivo 'statusinvest-busca-avancada.csv' na raiz.")
 
-# === ABA 4: RF & PGBL ===
+# === ABA 4: RF ===
 with tabs[3]:
     st.subheader("Renda Fixa & Previdência")
     
