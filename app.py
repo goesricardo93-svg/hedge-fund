@@ -18,7 +18,6 @@ def veredito_fii(row):
         if "PAPEL" in seg or "TÍTULOS" in seg:
             return "🔥 COMPRA SEGURA (Papel)" if 0.97 <= p <= 1.00 else "🟡 ANALISAR"
         
-        # Filtros de Tijolo (Opcionais se colunas existirem)
         if vac > 15: return "❌ EVITAR (Vacância)"
         if 0 < imov < 5: return "⚠️ RISCO (Concentração)"
         
@@ -60,7 +59,9 @@ with tab1:
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=df_hist.index, y=df_hist['Close'], name='PREÇO', line=dict(color='#29b5e8', width=3)))
             fig.add_trace(go.Scatter(x=df_hist.index, y=[res['suporte']]*len(df_hist), name='🛡️ SUPORTE', line=dict(color='#2ecc71', dash='dash')))
-            fig.add_trace(go.Scatter(x=res['stop_loss']]*len(df_hist), name='🚫 STOP LOSS', line=dict(color='#e74c3c', dash='dot')))
+            # LINHA CORRIGIDA ABAIXO:
+            fig.add_trace(go.Scatter(x=df_hist.index, y=[res['stop_loss']]*len(df_hist), name='🚫 STOP LOSS', line=dict(color='#e74c3c', dash='dot')))
+            
             fig.update_layout(height=400, legend=dict(orientation="h", y=1.1, x=0.5, xanchor="center"), margin=dict(l=0,r=0,b=0,t=40))
             st.plotly_chart(fig, use_container_width=True)
 
@@ -78,15 +79,11 @@ with tab2:
         
         df['P/VP_N'], df['DY_N'] = cl('P/VP'), cl('DY')
         df['PRECO_N'], df['LIQ_N'] = cl('PRECO'), cl('LIQUIDEZ MEDIA DIARIA')
-        
-        # Colunas opcionais de segurança
-        df['VACANCIA_N'] = cl('VACANCIA FISICA')
-        df['IMOVEIS_N'] = cl('N DE IMOVEIS')
+        df['VACANCIA_N'], df['IMOVEIS_N'] = cl('VACANCIA FISICA'), cl('N DE IMOVEIS')
         
         df['Preço Teto Bazin'] = (df['PRECO_N'] * (df['DY_N'] / 100)) / 0.06
         df['Margem Seg. (%)'] = ((df['Preço Teto Bazin'] / df['PRECO_N']) - 1) * 100
         
-        # Filtro de Segurança
         f = df[(df['P/VP_N'] >= 0.85) & (df['P/VP_N'] <= 1.00) & (df['LIQ_N'] >= 800000)].copy()
         
         if not f.empty:
