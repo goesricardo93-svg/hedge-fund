@@ -34,8 +34,7 @@ def load_market_data(tk):
 
 def analise_360_fii(row):
     try:
-        p_vp = row.get('P/VP_N', 0)
-        vac = row.get('VAC_N', 0)
+        p_vp, vac = row.get('P/VP_N', 0), row.get('VAC_N', 0)
         seg = str(row.get('SEGMENTO', '')).upper()
         if "PAPEL" in seg: return "🔥 COMPRA" if 0.98 <= p_vp <= 1.01 else "🟡 OBSERVAR"
         return "🏢 OPORTUNIDADE" if vac < 12 and p_vp < 0.96 else "✅ MANTÉM"
@@ -51,7 +50,7 @@ def rec_carteira(tk, preco, pm, info):
 # 3. INTERFACE
 st.sidebar.header("🕹️ Ricardo Central")
 q_tk = st.sidebar.text_input("Ticker:", "BBSE3").strip().upper()
-tk = q_tk if "." in q_tk else f"{q_tk.strip().upper()}.SA"
+tk = q_tk if "." in q_tk else f"{q_tk}.SA"
 
 t1, t2, t3, t4 = st.tabs(["📊 Inteligência", "🏙️ Scanner FIIs", "🛡️ PGBL", "💼 CARTEIRA"])
 
@@ -59,13 +58,10 @@ with t1:
     hist, info = load_market_data(tk)
     if not hist.empty:
         r = MotorAnalise().analisar(hist, info, tk)
-        
-        # Dashboard de Métricas com RSI 30/70
         m = st.columns(6)
         m[0].metric("Preço", f"R$ {r['preco']:.2f}")
         m[1].metric("Alvo", f"R$ {r['stop_gain']:.2f}")
         
-        # Alerta RSI
         rsi_val = r['rsi']
         rsi_label = f"{rsi_val:.1f}"
         if rsi_val < 30: rsi_label += " 🟢 (SOBREVENDA)"
@@ -100,34 +96,4 @@ with t1:
 with t2:
     st.header("🏙️ Scanner FII 360º")
     try:
-        df = pd.read_csv("statusinvest-busca-avancada.csv", sep=";", encoding="latin-1")
-        df.columns = [str(c).strip().upper() for c in df.columns]
-        
-        # Detecção Flexível de Colunas para evitar erros de index
-        def get_c(name):
-            return next((c for c in df.columns if name in c), None)
-
-        c_pvp, c_dy, c_prc, c_vac = get_c('P/VP'), get_c('DY'), get_c('PRECO'), get_c('VACANCIA')
-
-        if c_pvp: df['P/VP_N'] = pd.to_numeric(df[c_pvp].astype(str).str.replace('.','').str.replace(',','.'), errors='coerce')
-        if c_dy: df['DY_N'] = pd.to_numeric(df[c_dy].astype(str).str.replace('.','').str.replace(',','.'), errors='coerce')
-        if c_prc: df['PRECO_N'] = pd.to_numeric(df[c_prc].astype(str).str.replace('.','').str.replace(',','.'), errors='coerce')
-        if c_vac: df['VAC_N'] = pd.to_numeric(df[c_vac].astype(str).str.replace('.','').str.replace(',','.'), errors='coerce')
-        else: df['VAC_N'] = 0
-
-        df['Teto Bazin'] = (df['PRECO_N'] * (df['DY_N']/100)) / 0.06
-        df['Margem Seg. (%)'] = ((df['Teto Bazin'] / df['PRECO_N']) - 1) * 100
-        df['VEREDITO 360º'] = df.apply(analise_360_fii, axis=1)
-        
-        st.dataframe(df[['TICKER', 'VEREDITO 360º', 'P/VP', 'DY', c_vac if c_vac else 'TICKER', 'Margem Seg. (%)']].sort_values('Margem Seg. (%)', ascending=False))
-    except Exception as e: st.error(f"Erro no Scanner: {e}")
-
-with t4:
-    st.header("💼 Gestão de Carteira")
-    df_ed = st.data_editor(st.session_state.meus_ativos, num_rows="dynamic", use_container_width=True)
-    if st.button("🔄 Sincronizar Tudo"):
-        res = []
-        for _, row in df_ed.iterrows():
-            obj = yf.Ticker(row['Ticker'])
-            p_a = obj.fast_info['last_price']
-            rec =
+        df = pd.read_csv("statusinvest-busca-avancada.csv", sep=";", encoding="latin-1
