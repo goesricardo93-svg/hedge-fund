@@ -4,7 +4,7 @@ from motor import MotorAnalise
 import pandas as pd
 import plotly.graph_objects as go
 
-# Configuração inicial
+# Configuração inicial - DEVE ser a primeira linha
 st.set_page_config(page_title="Terminal Ricardo - Hedge Fund", layout="wide")
 
 # --- LÓGICA DE VEREDITO SEGURO 360º (FIIs) ---
@@ -53,7 +53,6 @@ with tab1:
     if not data.empty:
         res = MotorAnalise().analisar(data, info, ticker_final)
         if res:
-            # Filtros de Segurança: Dívida < 3x e ROE > 10%
             divida = info.get('debtToEbitda')
             divida_ok = (divida < 3) if divida is not None else True
             roe = info.get('returnOnEquity')
@@ -81,14 +80,4 @@ with tab1:
                 st.subheader("🏛️ Valuation & Saúde")
                 st.write(f"**Graham:** R$ {res['p_graham']:.2f} | **Bazin:** R$ {res['p_bazin']:.2f}")
                 st.write(f"**Dívida/EBITDA:** {divida if divida else 'N/A'}")
-                st.write(f"**ROE:** {roe*100 if roe else 0:.1f}%")
-
-# --- ABA 2: SCANNER FIIS (Segurança Máxima) ---
-with tab2:
-    st.header("🏙️ Scanner FII - Stress Test")
-    try:
-        # Tenta ler o CSV com suporte a acentos (comum no Excel brasileiro)
-        try:
-            df_fii = pd.read_csv("statusinvest-busca-avancada.csv", sep=";", encoding="utf-8")
-        except:
-            df_fii = pd.read_csv("statusinvest-busca-avancada.csv", sep="
+                st.write(f"**ROE:** {roe*100 if roe else 0:.
