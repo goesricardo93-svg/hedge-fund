@@ -21,7 +21,7 @@ class MotorAnalise:
         ma252 = df['close'].rolling(window=min(len(df), self.p_longo)).mean().iloc[-1]
         rsi14 = self.calcular_rsi(df['close'], self.p_curto).iloc[-1]
         
-        # --- VALUATIONS ---
+        # --- 1. ANÁLISE FUNDAMENTALISTA (VALOR) ---
         lpa = info.get('trailingEps', 0) if info else 0
         vpa = info.get('bookValue', 0) if info else 0
         dpa = info.get('dividendRate', 0) if info else 0
@@ -32,45 +32,49 @@ class MotorAnalise:
         
         vals = [v for v in [p_graham, p_bazin, p_gordon] if v > 0]
         preco_teto = np.mean(vals) if vals else preco_atual
-        upside_perc = ((preco_teto / preco_atual) - 1) * 100
+        margem_seguranca = preco_teto > (preco_atual * 1.10) # 10% de margem mínima
 
-        # --- SUPORTE / RESISTÊNCIA / FIBO ---
+        # --- 2. ANÁLISE TÉCNICA (MOMENTO) ---
+        tendencia_alta = preco_atual > ma252
+        sobrecomprado = rsi14 > 68  # Esticado (Perigo)
+        sobrevendido = rsi14 < 35   # Barato tecnicamente (Oportunidade)
+
+        # --- 3. CRUZAMENTO DE SEGURANÇA (MATRIZ DE DECISÃO) ---
+        if margem_seguranca and tendencia_alta and not sobrecomprado:
+            rec, cor = "COMPRA SEGURA (Valor + Tendência)", "green"
+        elif margem_seguranca and sobrevendido:
+            rec, cor = "COMPRA OPORTUNISTA (Valor + Reversão)", "green"
+        elif sobrecomprado:
+            rec, cor = "AGUARDAR (Preço Esticado / RSI Alto)", "yellow"
+        elif not margem_seguranca and tendencia_alta:
+            rec, cor = "MANTER (Tendência Forte, mas sem Margem)", "blue"
+        elif not margem_seguranca and not tendencia_alta:
+            rec, cor = "VENDA/FORA (Caro e em Queda)", "red"
+        else:
+            rec, cor = "AGUARDAR (Sinais Mistos)", "gray"
+
+        # --- SUPORTES E STOPS ---
         max_252 = float(df['close'].tail(252).max())
         min_252 = float(df['close'].tail(252).min())
         diff = max_252 - min_252
-
-        # --- STOP TÉCNICO (Suporte Anual - 2% de folga) ---
-        # Se o preço atual já estiver muito perto do suporte, 
-        # usamos 5% do preço atual como trava de segurança mínima.
-        stop_tecnico = min_252 * 0.98 
-        if stop_tecnico > (preco_atual * 0.95):
-            stop_tecnico = preco_atual * 0.93 # Fallback para 7% se o suporte estiver colado
-
-        # --- RECOMENDAÇÃO ---
-        tendencia = "ALTA" if preco_atual > ma252 else "BAIXA"
-        if preco_atual < preco_teto and rsi14 < 45:
-            rec, cor = "COMPRA FORTE (Teto + RSI)", "green"
-        elif preco_atual < preco_teto:
-            rec, cor = "COMPRA (Abaixo do Teto)", "green"
-        else:
-            rec, cor = "AGUARDAR (Fora de Faixa)", "blue"
+        stop_tecnico = min_252 * 0.98
 
         return {
             "preco": round(preco_atual, 2),
             "ma252": round(ma252, 2),
             "rsi_14": round(rsi14, 2),
-            "tendencia": tendencia,
+            "tendencia": "ALTA" if tendencia_alta else "BAIXA",
             "recomendacao": rec,
             "cor_sinal": cor,
             "val_graham": round(p_graham, 2),
             "val_bazin": round(p_bazin, 2),
             "val_gordon": round(p_gordon, 2),
             "preco_teto": round(preco_teto, 2),
-            "upside": round(upside_perc, 2),
+            "upside": round(((preco_teto/preco_atual)-1)*100, 2),
             "suporte": round(min_252, 2),
             "resistencia": round(max_252, 2),
             "stop_loss": round(stop_tecnico, 2),
-            "stop_gain": round(preco_teto, 2), # O alvo agora é o Preço Teto
+            "stop_gain": round(preco_teto, 2),
             "fibonacci": {
                 "61.8%": round(max_252 - (0.382 * diff), 2),
                 "50.0%": round(max_252 - (0.5 * diff), 2),
