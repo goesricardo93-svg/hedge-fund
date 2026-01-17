@@ -9,10 +9,11 @@ import datetime
 from email.mime.text import MIMEText
 
 # ======================================================
-# 1. CONFIGURAÇÕES & SEGREDOS
+# 1. CONFIGURAÇÕES INICIAIS
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 4.0", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 5.0", layout="wide")
 
+# Tenta ler os segredos. Se não achar, usa vazio.
 try:
     TELEGRAM_TOKEN = st.secrets["telegram"]["token"]
     TELEGRAM_CHAT_ID = st.secrets["telegram"]["chat_id"]
@@ -28,30 +29,30 @@ SMTP_SERVER = "smtp.office365.com"
 SMTP_PORT = 587
 
 # ======================================================
-# 2. MOTOR DE ANÁLISE & IA
+# 2. MOTOR DE ANÁLISE (CORRIGIDO E ROBUSTO)
 # ======================================================
 class MotorAnalise:
     def analisar(self, hist, info, ticker):
         try:
             if hist is None or hist.empty: return None
 
-            # 1. Dados Básicos
+            # Preço e Variação
             preco_atual = hist["Close"].iloc[-1]
             
-            # 2. RSI
+            # RSI
             delta = hist["Close"].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
             rs = gain / loss
             rsi = 100 - (100 / (1 + rs)).iloc[-1]
             
-            # 3. Volatilidade e Drawdown
+            # Volatilidade e Drawdown
             retornos = hist["Close"].pct_change().dropna()
             volatilidade = retornos.std() * (252 ** 0.5)
             topo = hist["Close"].cummax()
             drawdown = ((hist["Close"] - topo) / topo).min() * 100
 
-            # 4. Valuation
+            # Valuation
             dy = info.get("dividendYield", 0) or 0
             lpa = info.get("trailingEps", 0) or 0
             vpa = info.get("bookValue", 0) or 0
@@ -59,48 +60,46 @@ class MotorAnalise:
             dpa = preco_atual * dy
             p_bazin = dpa / 0.06 if dpa > 0 else 0
             p_graham = (22.5 * lpa * vpa) ** 0.5 if (lpa > 0 and vpa > 0) else 0
-            p_gordon = p_bazin 
+            p_gordon = p_bazin # Proxy
 
-            # 5. Níveis Técnicos
+            # Níveis Técnicos
             window = 60 
             suporte = hist["Close"].tail(window).min()
             resistencia = hist["Close"].tail(window).max()
             stop_loss = suporte * 0.95
             stop_gain = resistencia * 1.05
 
-            # 6. IA OBJETIVA (SCORING AÇÕES)
-            score = 0
+            # --- IA DE DECISÃO (SCORE) ---
+            score = 50 # Começa neutro
             motivos = []
 
-            # Critérios Fundamentalistas
-            if p_bazin > 0 and preco_atual < p_bazin: 
-                score += 25
-                motivos.append("Abaixo do Teto Bazin")
-            if p_graham > 0 and preco_atual < p_graham: 
-                score += 25
-                motivos.append("Desconto Patrimonial (Graham)")
-            if dy > 0.06:
+            # Fundamentalista
+            if p_bazin > 0 and preco_atual < p_bazin:
                 score += 15
-                motivos.append("DY Atrativo (>6%)")
-
-            # Critérios Técnicos
-            if rsi < 35: 
-                score += 20
-                motivos.append("Sobrevenda (RSI)")
-            elif rsi > 70: 
-                score -= 20
-                motivos.append("Sobrecompra (RSI)")
+                motivos.append("Abaixo do Teto Bazin")
             
-            if volatilidade > 0.40:
-                score -= 20
-                motivos.append("Alta Volatilidade")
+            if p_graham > 0 and preco_atual < p_graham:
+                score += 15
+                motivos.append("Abaixo do Valor Graham")
 
-            # Decisão Final
-            if score >= 80: decisao = "🟢🟢 COMPRA FORTE"
+            # Técnico
+            if rsi < 30:
+                score += 20
+                motivos.append("RSI Sobrevendido")
+            elif rsi > 70:
+                score -= 20
+                motivos.append("RSI Sobrecomprado")
+
+            if preco_atual <= suporte * 1.02:
+                score += 10
+                motivos.append("Perto de Suporte")
+
+            score = min(100, max(0, score)) # Trava entre 0 e 100
+
+            if score >= 75: decisao = "🟢🟢 COMPRA FORTE"
             elif score >= 60: decisao = "🟢 COMPRA"
-            elif score >= 40: decisao = "🟡 MANTER"
-            elif score >= 20: decisao = "🔴 VENDA"
-            else: decisao = "🔴🔴 VENDA FORTE"
+            elif score <= 30: decisao = "🔴 VENDA"
+            else: decisao = "⚪ MANTER"
 
             return {
                 "preco": preco_atual,
@@ -110,12 +109,15 @@ class MotorAnalise:
                 "p_bazin": p_bazin,
                 "p_graham": p_graham,
                 "p_gordon": p_gordon,
+                "lpa": lpa,
+                "vpa": vpa,
                 "dy": dy,
                 "suporte": suporte,
+                "resistencia": resistencia,
                 "stop_loss": stop_loss,
                 "stop_gain": stop_gain,
-                "score_ia": score,
-                "decisao_ia": decisao,
+                "score_ia": score,        # CAMPO OBRIGATÓRIO
+                "decisao_ia": decisao,    # CAMPO OBRIGATÓRIO
                 "motivos": ", ".join(motivos) if motivos else "Neutro"
             }
         except Exception as e:
@@ -147,7 +149,7 @@ class MotorAnalise:
         return dados
 
 # ======================================================
-# 3. FUNÇÕES DE SUPORTE & ALERTAS
+# 3. FUNÇÕES DE SUPORTE
 # ======================================================
 def enviar_telegram(mensagem):
     if not TELEGRAM_TOKEN: return
@@ -175,25 +177,7 @@ def disparar_alerta(titulo, corpo):
     enviar_telegram(msg)
     enviar_email(msg)
 
-# === ALERTA DIÁRIO INTELIGENTE ===
-if "alertas_diarios" not in st.session_state:
-    st.session_state.alertas_diarios = {}
-
-def alerta_diario_ia(ticker, score, decisao, preco):
-    hoje = datetime.date.today().isoformat()
-    chave = f"{ticker}_{hoje}"
-
-    # Se já enviou hoje para este ticker, sai
-    if st.session_state.alertas_diarios.get(chave):
-        return
-
-    # Dispara apenas para decisões extremas
-    if "FORTE" in decisao:
-        msg = f"*{ticker}*\nDecisão: {decisao}\nScore IA: {score}/100\nPreço: R$ {preco:.2f}"
-        disparar_alerta(f"ALERTA IA: {ticker}", msg)
-        st.session_state.alertas_diarios[chave] = True
-        st.toast(f"Alerta Diário Enviado: {ticker}", icon="🔔")
-
+# === CORREÇÃO DO CACHE ===
 @st.cache_data(ttl=3600)
 def obter_dados(ticker):
     try:
@@ -203,9 +187,16 @@ def obter_dados(ticker):
         
         motor = MotorAnalise()
         r = motor.analisar(hist, t.info, ticker)
+        
+        # RETORNA DICTS PUROS (Sem objetos complexos)
         return r, t.info 
     except:
         return None, None
+
+def get_rsi_status(val):
+    if val < 30: return f"🟢 SOBREVENDA ({val:.0f})"
+    if val > 70: return f"🔴 SOBRECOMPRA ({val:.0f})"
+    return f"⚪ NEUTRO ({val:.0f})"
 
 def sugerir_aportes(df, aporte, metas_setor):
     if df.empty: return pd.DataFrame()
@@ -220,10 +211,10 @@ def sugerir_aportes(df, aporte, metas_setor):
     df["Peso_Alvo"] = df["Meta_Setorial"] / qtd_por_setor
     df["Gap"] = df["Peso_Alvo"] - df["Peso_Atual"]
     
-    # Usa Score se existir, senão 50
-    score_val = df["Score"] if "Score" in df.columns else 50
-    df["Score_Alocacao"] = ((df["Gap"] * 200) + (score_val / 100)).clip(lower=0)
-    
+    # Garante que Score existe
+    if "Score" not in df.columns: df["Score"] = 50
+        
+    df["Score_Alocacao"] = ((df["Gap"] * 200) + (df["Score"] / 100)).clip(lower=0)
     soma = df["Score_Alocacao"].sum()
     if soma > 0: df["Aporte_Sugerido"] = (df["Score_Alocacao"] / soma) * aporte
     else: df["Aporte_Sugerido"] = 0
@@ -237,15 +228,12 @@ def gerar_ranking_acoes(df_acoes):
     for i, row in df_acoes.iterrows():
         r, info = obter_dados(row["Ticker"])
         if r:
-            # Chama o alerta diário aqui
-            alerta_diario_ia(row["Ticker"], r["score_ia"], r["decisao_ia"], r["preco"])
-            
             ranking.append({
                 "Ticker": row["Ticker"],
                 "Setor": row["Setor"],
                 "Preço": r["preco"],
-                "Score IA": r["score_ia"],
-                "Decisão": r["decisao_ia"],
+                "Score IA": r.get("score_ia", 50), # Proteção contra missing key
+                "Decisão": r.get("decisao_ia", "Neutro"),
                 "DY (%)": f"{r['dy']*100:.2f}%",
                 "RSI": f"{r['rsi']:.0f}"
             })
@@ -253,10 +241,9 @@ def gerar_ranking_acoes(df_acoes):
     
     return pd.DataFrame(ranking).sort_values("Score IA", ascending=False)
 
-# === SCANNER IA DE FIIs ===
+# === SCANNER FIIs ===
 def score_fii(row):
     score = 0
-    # Tratamento de string para float (CSV brasileiro)
     try:
         dy = float(str(row.get("DY", "0")).replace("%", "").replace(",", "."))
         pvp = float(str(row.get("P/VP", "0")).replace(",", "."))
@@ -268,11 +255,6 @@ def score_fii(row):
     if pvp <= 1.05 and pvp >= 0.8: score += 25
     if vac <= 10: score += 20
     
-    # Critério extra: Liquidez (se houver coluna)
-    if "LIQUIDEZ MEDIA DIARIA" in row:
-        liq = float(str(row.get("LIQUIDEZ MEDIA DIARIA", "0")).replace(".", "").replace(",", "."))
-        if liq > 1000000: score += 15
-
     if score >= 80: decisao = "🟢🟢 COMPRA FORTE"
     elif score >= 60: decisao = "🟢 COMPRA"
     elif score >= 40: decisao = "🟡 MANTER"
@@ -322,7 +304,6 @@ st.session_state.metas_setor = df_metas
 st.sidebar.markdown("---")
 ticker_input = st.sidebar.text_input("🔍 Ticker:", "BBAS3.SA").upper()
 
-# NOVAS ABAS INCLUINDO RANKING IA
 tabs = st.tabs(["🔎 Análise Técnica", "💼 Ações", "🏆 Ranking IA", "🏢 FIIs & Scanner", "💰 RF & PGBL"])
 
 # --- ABA 1: ANÁLISE ---
@@ -334,14 +315,14 @@ with tabs[0]:
         # PAINEL IA
         st.divider()
         col_score, col_decisao = st.columns([1, 2])
-        col_score.metric("Score IA (0-100)", r['score_ia'])
+        col_score.metric("Score IA (0-100)", r.get('score_ia', 0))
         
-        decisao = r['decisao_ia']
+        decisao = r.get('decisao_ia', "Neutro")
         if "COMPRA" in decisao: st.success(f"### {decisao}")
         elif "VENDA" in decisao: st.error(f"### {decisao}")
         else: st.warning(f"### {decisao}")
         
-        st.caption(f"**Motivos:** {r['motivos']}")
+        st.caption(f"**Motivos:** {r.get('motivos', '')}")
         st.divider()
 
         # Métricas
@@ -389,9 +370,14 @@ with tabs[1]:
         for i, row in df_acoes.iterrows():
             r, info = obter_dados(row["Ticker"])
             if r:
-                # Alerta diário é verificado dentro da Aba 3 (Ranking), 
-                # mas podemos verificar aqui também se quiser
-                res.append({**row.to_dict(), "Cotação": r["preco"], "Veredito": r['decisao_ia'], "Score": r['score_ia'], "Bazin": r["p_bazin"]})
+                status = r.get('decisao_ia', "Neutro")
+                chave = f"{row['Ticker']}_{status}"
+                if "COMPRA" in status and chave not in st.session_state.alertas_enviados:
+                    disparar_alerta(f"OPORTUNIDADE: {row['Ticker']}", f"Veredito: {status}\nPreço: {r['preco']:.2f}")
+                    st.session_state.alertas_enviados.add(chave)
+                    st.toast(f"Alerta: {row['Ticker']}")
+
+                res.append({**row.to_dict(), "Cotação": r["preco"], "Veredito": status, "Score": r.get('score_ia', 0), "Bazin": r["p_bazin"]})
             else: res.append({**row.to_dict(), "Cotação": 0, "Veredito": "ERRO", "Score": 0, "Bazin": 0})
             bar.progress((i+1)/total)
         st.session_state.df_final_acoes = pd.DataFrame(res)
@@ -418,19 +404,14 @@ with tabs[1]:
 
 # --- ABA 3: RANKING IA ---
 with tabs[2]:
-    st.subheader("🏆 Ranking Quantitativo de Ações")
-    st.info("Ranking gerado automaticamente com base no Score IA (0-100). Também dispara alertas diários.")
-
-    if st.button("📊 Gerar Ranking IA"):
+    st.subheader("🏆 Ranking Quantitativo")
+    if st.button("Gerar Ranking"):
         df_rank = gerar_ranking_acoes(st.session_state.carteira_acoes)
         st.session_state.df_ranking = df_rank
         st.rerun()
-
+    
     if "df_ranking" in st.session_state:
-        st.dataframe(
-            st.session_state.df_ranking.style.background_gradient(subset=["Score IA"], cmap="Greens"),
-            use_container_width=True
-        )
+        st.dataframe(st.session_state.df_ranking.style.background_gradient(subset=["Score IA"], cmap="Greens"), use_container_width=True)
 
 # --- ABA 4: FIIs & SCANNER ---
 with tabs[3]:
@@ -449,17 +430,21 @@ with tabs[3]:
     if "df_fiis_final" in st.session_state: st.dataframe(st.session_state.df_fiis_final, use_container_width=True)
 
     st.divider()
-    st.subheader("🤖 Scanner IA de FIIs (Quantitativo)")
-    st.caption("Faça upload do CSV de Busca Avançada do StatusInvest para que a IA analise as oportunidades.")
-    
-    uploaded_file = st.file_uploader("Arraste o arquivo CSV aqui", type=["csv"])
+    st.subheader("🔍 Scanner Offline (CSV)")
+    uploaded_file = st.file_uploader("Arraste o arquivo 'statusinvest-busca-avancada.csv' aqui", type=["csv"])
     
     if uploaded_file is not None:
         try:
-            # Lê com separador ponto e vírgula (padrão StatusInvest)
             df_scan = pd.read_csv(uploaded_file, sep=";", encoding="latin-1")
             df_scan.columns = df_scan.columns.str.strip().str.upper()
             
+            # Limpeza Numérica
+            cols = ["DY", "P/VP", "VACÂNCIA FISICA"]
+            for c in cols:
+                if c in df_scan.columns:
+                    df_scan[c] = pd.to_numeric(df_scan[c].astype(str).str.replace(".","").str.replace(",",".").str.replace("%",""), errors='coerce')
+            
+            # Scores
             resultados = []
             for _, row in df_scan.iterrows():
                 score, decisao = score_fii(row)
@@ -468,19 +453,13 @@ with tabs[3]:
                     "PRECO": row.get("PRECO", "0"),
                     "DY": row.get("DY", "0"),
                     "P/VP": row.get("P/VP", "0"),
-                    "VACANCIA": row.get("VACÂNCIA FISICA", "0"),
                     "SCORE IA": score,
                     "DECISAO": decisao
                 })
             
             df_res = pd.DataFrame(resultados).sort_values("SCORE IA", ascending=False)
-            
-            # Filtra apenas oportunidades reais
-            df_oportunidades = df_res[df_res["SCORE IA"] >= 60]
-            
-            st.success(f"{len(df_oportunidades)} Oportunidades de Compra Encontradas!")
-            st.dataframe(df_oportunidades.style.background_gradient(subset=["SCORE IA"], cmap="Greens"), use_container_width=True)
-            
+            st.success(f"{len(df_res)} Ativos Analisados")
+            st.dataframe(df_res.style.background_gradient(subset=["SCORE IA"], cmap="Greens"), use_container_width=True)
         except Exception as e:
             st.error(f"Erro ao ler arquivo: {e}")
 
