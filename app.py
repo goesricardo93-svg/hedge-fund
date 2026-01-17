@@ -2,66 +2,91 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 from motor import MotorAnalise
-import time
+import plotly.graph_objects as go
 
-st.set_page_config(page_title="Painel Macro", layout="wide")
+st.set_page_config(page_title="Hedge Fund Dashboard", layout="wide")
 
-st.title("📊 Monitor de Divergência Macro (252 Períodos)")
+# --- CABEÇALHO ---
+st.title("🏛️ Hedge Fund Intelligence")
+st.markdown("---")
 
-def rodar_site():
-    watchlist = ["BTC-USD", "ETH-USD", "PETR4.SA", "VALE3.SA", "AAPL", "TSLA"]
-    motor = MotorAnalise()
-    resultados_finais = []
+motor = MotorAnalise()
 
-    progresso = st.progress(0)
-    status_text = st.empty()
+# --- SEÇÃO 1: PAINEL DE MONITORAMENTO (WATCHLIST) ---
+st.subheader("📊 Monitor Macro (252 Períodos)")
+watchlist = ["BTC-USD", "ETH-USD", "PETR4.SA", "VALE3.SA", "AAPL", "TSLA"]
 
-    for i, ticker in enumerate(watchlist):
-        status_text.text(f"Analisando {ticker}...")
-        try:
-            # Baixamos os dados
-            data = yf.download(ticker, period="3y", progress=False)
+resultados_finais = []
+cols_resumo = st.columns(len(watchlist))
+
+# Processamento rápido para a tabela
+for ticker in watchlist:
+    try:
+        data = yf.download(ticker, period="3y", progress=False)
+        if not data.empty:
+            if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
+            data.columns = [str(col).lower() for col in data.columns]
+            data = data.reset_index()
+            data.columns = [str(col).lower() for col in data.columns]
             
-            if not data.empty:
-                # CORREÇÃO AQUI: Limpando os nomes das colunas de forma segura
-                if isinstance(data.columns, pd.MultiIndex):
-                    data.columns = data.columns.get_level_values(0)
-                
-                # Garante que as colunas sejam apenas strings simples e minúsculas
-                data.columns = [str(col).lower() for col in data.columns]
-                
-                # Reset do index para ter a coluna 'date'
-                data = data.reset_index()
-                data.columns = [str(col).lower() for col in data.columns]
-
-                # Processamento no Motor
-                res = motor.analisar(data)
-                
-                icone = "⚪"
-                if "ALTA" in res['sinal']: icone = "🟢"
-                elif "BAIXA" in res['sinal']: icone = "🔴"
-
-                resultados_finais.append({
-                    "Ativo": ticker,
-                    "Preço": f"$ {res['preco']:,.2f}",
-                    "RSI 252p": res.get('rsi_252', 'N/A'),
-                    "Status": f"{icone} {res['sinal']}"
-                })
+            res = motor.analisar(data)
+            icone = "🟢" if "ALTA" in res['sinal'] else "🔴" if "BAIXA" in res['sinal'] else "⚪"
             
-        except Exception as e:
-            st.error(f"Erro em {ticker}: {str(e)}")
+            resultados_finais.append({
+                "Ativo": ticker,
+                "Preço": f"$ {res['preco']:,.2f}",
+                "RSI 252p": res['rsi_252'],
+                "Status": f"{icone} {res['sinal']}"
+            })
+    except:
+        continue
+
+if resultados_finais:
+    st.table(pd.DataFrame(resultados_finais))
+
+st.markdown("---")
+
+# --- SEÇÃO 2: CONSULTA INDIVIDUAL E GRÁFICO ---
+st.subheader("🔍 Consulta Detalhada de Ativo")
+col_input, col_info = st.columns([1, 3])
+
+with col_input:
+    ticker_input = st.text_input("Digite o Ticker (ex: BTC-USD, ITUB4.SA):", value="BTC-USD").upper()
+    periodo = st.selectbox("Período do Gráfico:", ["1y", "2y", "5y"], index=0)
+
+if ticker_input:
+    try:
+        # Busca dados para o gráfico
+        df_individual = yf.download(ticker_input, period="3y", progress=False)
         
-        progresso.progress((i + 1) / len(watchlist))
-        time.sleep(0.1)
+        if not df_individual.empty:
+            # Limpeza padrão para o motor
+            if isinstance(df_individual.columns, pd.MultiIndex): df_individual.columns = df_individual.columns.get_level_values(0)
+            df_individual.columns = [str(col).lower() for col in df_individual.columns]
+            df_proc = df_individual.reset_index()
+            df_proc.columns = [str(col).lower() for col in df_proc.columns]
+            
+            # Análise do Motor
+            analise = motor.analisar(df_proc)
+            
+            # Exibe métricas em destaque
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Preço Atual", f"$ {analise['preco']:,.2f}")
+            m2.metric("RSI 252p", analise['rsi_252'])
+            m3.metric("Status", analise['sinal'])
 
-    status_text.empty()
-    progresso.empty()
-
-    if resultados_finais:
-        df_mostrar = pd.DataFrame(resultados_finais)
-        st.table(df_mostrar)
-    else:
-        st.warning("Nenhum dado foi processado.")
-
-if __name__ == "__main__":
-    rodar_site()
+            # --- PLOTAGEM DO GRÁFICO (Plotly) ---
+            fig = go.Figure()
+            # Preço
+            fig.add_trace(go.Scatter(x=df_proc['date'], y=df_proc['close'], name="Preço", line=dict(color='royalblue')))
+            # Média 252
+            df_motor = motor.processar_df(df_proc)
+            fig.add_trace(go.Scatter(x=df_motor['date'], y=df_motor['ma252'], name="Média 252p", line=dict(color='orange', dash='dot')))
+            
+            fig.update_layout(title=f"Histórico de {ticker_input}", template="plotly_white", height=500)
+            st.plotly_chart(fig, use_container_width=True)
+            
+        else:
+            st.warning("Ticker não encontrado.")
+    except Exception as e:
+        st.error(f"Erro na consulta: {e}")
