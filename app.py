@@ -3,30 +3,18 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 import numpy as np
-import requests
-import smtplib
-from email.mime.text import MIMEText
+import os
 from motor import MotorAnalise
+from alerts import disparar_alerta # Importa o novo sistema de alertas
 
 # ======================================================
-# 1. CONFIGURAÇÕES & SEGREDOS
+# CONFIGURAÇÃO DA PÁGINA
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo | v6.1 Fix", layout="wide")
-
-TELEGRAM_TOKEN = "8515547858:AAHDCGoE-Fg-51If_r_5xZSO2YHgoTrceZQ"
-TELEGRAM_CHAT_ID = "833554938"
-EMAIL_USER = "goes.ricardo93@gmail.com"
-EMAIL_PASS = "Ysi0xgki5-"
+st.set_page_config(page_title="Hedge Fund Ricardo | v8.0", layout="wide")
 
 # ======================================================
-# 2. FUNÇÕES DE SUPORTE
+# FUNÇÕES AUXILIARES (CACHE E LÓGICA)
 # ======================================================
-def enviar_telegram(msg):
-    try:
-        if "8515547858:AAHDCGoE-Fg-51If_r_5xZSO2YHgoTrceZQ" not in TELEGRAM_TOKEN: return
-        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", data={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
-    except: pass
-
 @st.cache_data(ttl=3600)
 def obter_dados(ticker):
     try:
@@ -37,89 +25,70 @@ def obter_dados(ticker):
         motor = MotorAnalise()
         r = motor.analisar(hist, t.info, ticker)
         return r, t.info
-    except Exception as e:
-        print(f"Erro: {e}")
+    except:
         return None, None
 
-# --- LÓGICA DE APORTES COM METAS POR SETOR ---
+def get_rsi_status(val):
+    if val < 30: return f"🟢 SOBREVENDA ({val:.0f})"
+    if val > 70: return f"🔴 SOBRECOMPRA ({val:.0f})"
+    return f"⚪ NEUTRO ({val:.0f})"
+
 def sugerir_aportes(df, aporte, metas_setor):
     if df.empty: return pd.DataFrame()
     df = df.copy()
     
-    # 1. Dados Financeiros
+    # Cálculos de Peso
     df["Valor"] = df["Qtd"] * df["Cotação"]
     total = df["Valor"].sum()
-    if total == 0: total = 1 
+    if total == 0: total = 1
     
     df["Peso_Atual"] = df["Valor"] / total
-
-    # 2. Mapear a Meta do Setor
+    
+    # Metas
     dict_metas = dict(zip(metas_setor["Setor"], metas_setor["Meta"]))
     df["Meta_Setorial"] = df["Setor"].map(dict_metas).fillna(0.05)
-    
-    # Divide a meta do setor pelo número de ativos
     qtd_por_setor = df.groupby("Setor")["Ticker"].transform("count")
     df["Peso_Alvo"] = df["Meta_Setorial"] / qtd_por_setor
 
-    # 3. Score de Aporte
+    # Score de Prioridade
     df["Gap"] = df["Peso_Alvo"] - df["Peso_Atual"]
     
+    # Fórmula: Gap (rebalanceamento) + Score Técnico + Oportunidade Preço
     df["Score_IA"] = (
         (df["Gap"] * 100 * 2) +          
         (df["Score"] / 100) +            
         ((df["PM"] - df["Cotação"]) / df["PM"]) 
     )
-    
     df["Score_IA"] = df["Score_IA"].clip(lower=0)
 
-    # 4. Distribuição
-    soma_score = df["Score_IA"].sum()
-    if soma_score > 0:
-        df["Aporte_Sugerido"] = (df["Score_IA"] / soma_score) * aporte
+    # Distribuição
+    soma = df["Score_IA"].sum()
+    if soma > 0:
+        df["Aporte_Sugerido"] = (df["Score_IA"] / soma) * aporte
     else:
         df["Aporte_Sugerido"] = 0
         
     return df[df["Aporte_Sugerido"] > 1].sort_values("Aporte_Sugerido", ascending=False)
 
-def monte_carlo(patrimonio_atual, aporte, meses=120, sims=1000):
-    res = []
-    mu = 0.008 
-    sigma = 0.05 
-    for _ in range(sims):
-        pat = patrimonio_atual
-        for _ in range(meses):
-            pat = pat * (1 + np.random.normal(mu, sigma)) + aporte
-        res.append(pat)
-    return res
-
-def stress_test(valor):
-    cenarios = {"2008 (-50%)": -0.50, "COVID (-35%)": -0.35, "Juros Altos (-15%)": -0.15}
-    out = {}
-    for c, choque in cenarios.items():
-        hist = [valor]
-        v = valor * (1 + choque)
-        hist.append(v)
-        for _ in range(10):
-            v = v * (1 + 0.005)
-            hist.append(v)
-        out[c] = hist
-    return out
-
 # ======================================================
-# 3. INICIALIZAÇÃO DE DADOS
+# ESTADO DA SESSÃO (DADOS INICIAIS)
 # ======================================================
 if "carteira_acoes" not in st.session_state:
     st.session_state.carteira_acoes = pd.DataFrame([
         ["BBAS3.SA", 1703, 24.48, "Bancos"],
         ["VALE3.SA", 152, 54.79, "Mineração"],
         ["ITSA4.SA", 1174, 9.63, "Holding"],
-        ["TAEE11.SA", 500, 35.00, "Elétricas"]
+        ["TAEE11.SA", 500, 35.00, "Elétricas"],
+        ["KLBN4.SA", 2323, 3.63, "Papel"],
+        ["PETR4.SA", 900, 32.07, "Petróleo"]
     ], columns=["Ticker", "Qtd", "PM", "Setor"])
 
 if "carteira_fiis" not in st.session_state:
     st.session_state.carteira_fiis = pd.DataFrame([
-        ["HGLG11.SA", 50, 160.00, "Logística"],
-        ["KNCR11.SA", 100, 100.50, "Papel"]
+        ["HGLG11.SA", 20, 158.03, "Logística"],
+        ["KNCR11.SA", 27, 103.11, "Papel"],
+        ["MXRF11.SA", 100, 10.50, "Híbrido"],
+        ["VISC11.SA", 16, 109.70, "Shoppings"]
     ], columns=["Ticker", "Qtd", "PM", "Setor"])
 
 if "carteira_rf" not in st.session_state:
@@ -130,94 +99,101 @@ if "carteira_rf" not in st.session_state:
 
 if "metas_setor" not in st.session_state:
     st.session_state.metas_setor = pd.DataFrame([
-        ["Bancos", 0.15],
-        ["Mineração", 0.10],
-        ["Elétricas", 0.15],
-        ["Holding", 0.10],
-        ["Logística", 0.20],
-        ["Papel", 0.20],
-        ["Outros", 0.10]
+        ["Bancos", 0.15], ["Mineração", 0.10], ["Elétricas", 0.15],
+        ["Holding", 0.10], ["Logística", 0.10], ["Papel", 0.10],
+        ["Outros", 0.10], ["Petróleo", 0.10], ["Shoppings", 0.05], ["Híbrido", 0.05]
     ], columns=["Setor", "Meta"])
 
 if "alertas_enviados" not in st.session_state:
     st.session_state.alertas_enviados = set()
 
 # ======================================================
-# 4. INTERFACE
+# INTERFACE PRINCIPAL
 # ======================================================
 st.sidebar.title("📊 Painel de Controle")
 
-# --- BLOCO DE METAS (SIDEBAR) ---
+# --- SIDEBAR: METAS ---
 st.sidebar.markdown("---")
-st.sidebar.subheader("🎯 Metas por Setor (%)")
-
-df_metas = st.sidebar.data_editor(
-    st.session_state.metas_setor, 
-    column_config={"Meta": st.column_config.NumberColumn(format="%.2f")},
-    num_rows="dynamic",
-    key="editor_metas"
-)
+st.sidebar.subheader("🎯 Metas de Alocação")
+df_metas = st.sidebar.data_editor(st.session_state.metas_setor, num_rows="dynamic", key="meta_ed")
 st.session_state.metas_setor = df_metas
 
-soma_metas = df_metas["Meta"].sum()
-if soma_metas != 1.0:
-    st.sidebar.warning(f"⚠️ Soma: {soma_metas*100:.0f}% (Ideal: 100%)")
+soma = df_metas["Meta"].sum()
+if abs(soma - 1.0) > 0.01:
+    st.sidebar.warning(f"⚠️ Soma: {soma*100:.0f}% (Ideal: 100%)")
 else:
-    st.sidebar.success("✅ Metas OK (100%)")
+    st.sidebar.success("✅ Alocação Balanceada")
 
 st.sidebar.markdown("---")
-# AQUI ESTAVA O ERRO ANTES, AGORA ESTÁ CORRIGIDO:
-ticker_analise = st.sidebar.text_input("🔍 Analisar Ticker:", "BBAS3.SA").upper()
+ticker_input = st.sidebar.text_input("🔍 Ticker:", "BBAS3.SA").upper()
 
-# --- ABAS ---
-tabs = st.tabs(["🔎 Análise", "💼 Ações", "🏢 FIIs", "💰 Fixa & PGBL"])
+# --- ABAS PRINCIPAIS ---
+tabs = st.tabs(["🔎 Análise Técnica", "💼 Ações", "🏢 FIIs & Scanner", "💰 RF & PGBL"])
 
-# ABA 1: ANÁLISE
+# === ABA 1: ANÁLISE TÉCNICA E FUNDAMENTALISTA ===
 with tabs[0]:
-    st.header(f"Raio-X: {ticker_analise}")
-    r, info = obter_dados(ticker_analise)
+    st.header(f"Raio-X: {ticker_input}")
+    r, info = obter_dados(ticker_input)
+    
     if r:
+        # Linha 1: Preços
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Preço", f"R$ {r['preco']:.2f}")
-        c2.metric("Bazin (6%)", f"R$ {r['p_bazin']:.2f}", delta=f"{r['p_bazin']-r['preco']:.2f}")
-        c3.metric("RSI", f"{r['rsi']:.0f}")
-        c4.metric("Volatilidade", f"{r['volatilidade']*100:.1f}%")
-        
-        # Gráfico simples
-        try:
-            hist_chart = yf.download(ticker_analise, period="1y", progress=False)["Close"]
-            if not hist_chart.empty:
-                st.line_chart(hist_chart)
-        except:
-            st.warning("Gráfico indisponível no momento.")
-    else:
-        st.warning("Ticker não encontrado ou erro na API.")
+        c1.metric("Preço Atual", f"R$ {r['preco']:.2f}")
+        c2.metric("Bazin (Teto 6%)", f"R$ {r['p_bazin']:.2f}", delta=f"{r['p_bazin']-r['preco']:.2f}")
+        c3.metric("Graham (Justo)", f"R$ {r['p_graham']:.2f}")
+        c4.metric("Gordon (Est.)", f"R$ {r['p_gordon']:.2f}")
 
-# ABA 2: AÇÕES
+        # Linha 2: Indicadores
+        c5, c6, c7, c8 = st.columns(4)
+        c5.markdown(f"**{get_rsi_status(r['rsi'])}**")
+        c6.metric("Volatilidade", f"{r['volatilidade']*100:.1f}%")
+        c7.metric("Drawdown Max", f"{r['drawdown']:.1f}%", delta_color="inverse")
+        c8.metric("DY Anual", f"{r['dy']*100:.2f}%")
+
+        # Gráfico
+        try:
+            hist_chart = yf.download(ticker_input, period="2y", progress=False)
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=hist_chart.index, y=hist_chart["Close"], name="Preço"))
+            if r['p_bazin'] > 0: 
+                fig.add_hline(y=r['p_bazin'], line_dash="dash", line_color="green", annotation_text="Teto Bazin")
+            st.plotly_chart(fig, use_container_width=True)
+        except:
+            st.warning("Gráfico indisponível.")
+    else:
+        st.warning("Ticker não encontrado.")
+
+# === ABA 2: AÇÕES ===
 with tabs[1]:
-    st.subheader("Carteira de Ações")
-    df_acoes = st.data_editor(st.session_state.carteira_acoes, num_rows="dynamic", key="ed_ac", use_container_width=True)
+    st.subheader("Gestão de Ações")
+    df_acoes = st.data_editor(st.session_state.carteira_acoes, num_rows="dynamic", key="ed_acoes", use_container_width=True)
     st.session_state.carteira_acoes = df_acoes
 
-    if st.button("🔄 Calcular Ações"):
+    if st.button("🔄 Analisar Ações"):
         res = []
         bar = st.progress(0)
         for i, row in df_acoes.iterrows():
             r, info = obter_dados(row["Ticker"])
             if r:
+                # Score de Convergência
                 score = 0
-                if r["preco"] < r["p_bazin"]: score += 40
+                if r["preco"] < r["p_bazin"]: score += 30
+                if r["preco"] < r["p_graham"]: score += 20
                 if r["rsi"] < 40: score += 30
-                if row["PM"] > r["preco"]: score += 30
+                if row["PM"] > r["preco"]: score += 20
                 
                 status = "MANTER"
                 if score >= 70: status = "🟢 COMPRA"
-                
-                # Alerta
+                elif score <= 30: status = "🔴 VENDA"
+
+                # Disparo de Alerta (Telegram + Outlook)
                 chave = f"{row['Ticker']}_{status}"
                 if "COMPRA" in status and chave not in st.session_state.alertas_enviados:
-                    enviar_telegram(f"AÇÃO: {row['Ticker']} barato! Bazin: {r['p_bazin']:.2f}")
+                    titulo = f"OPORTUNIDADE: {row['Ticker']}"
+                    corpo = f"Preço: R$ {r['preco']:.2f}\nBazin: R$ {r['p_bazin']:.2f}\nScore: {score}/100"
+                    disparar_alerta(titulo, corpo)
                     st.session_state.alertas_enviados.add(chave)
+                    st.toast(f"Alerta enviado para {row['Ticker']}", icon="📧")
 
                 res.append({**row.to_dict(), "Cotação": r["preco"], "Score": score, "Bazin": r["p_bazin"]})
             else:
@@ -229,71 +205,104 @@ with tabs[1]:
     if "df_final_acoes" in st.session_state:
         df_final = st.session_state.df_final_acoes
         st.dataframe(df_final.style.background_gradient(subset=["Score"], cmap="Greens"), use_container_width=True)
-        
+
         c1, c2 = st.columns(2)
         with c1:
-            st.write("#### 🤖 IA de Aporte (Baseada nas Metas)")
-            val = st.number_input("Valor Aporte", 1000.0)
-            if st.button("Sugerir Aporte"):
+            st.write("#### 🤖 IA de Aporte")
+            val = st.number_input("Aporte Disponível (R$)", 1000.0)
+            if st.button("Sugerir Alocação"):
                 sug = sugerir_aportes(df_final, val, st.session_state.metas_setor)
-                if not sug.empty:
-                    st.dataframe(sug[["Ticker", "Setor", "Peso_Atual", "Peso_Alvo", "Aporte_Sugerido"]].style.format({
-                        "Peso_Atual": "{:.1%}", "Peso_Alvo": "{:.1%}", "Aporte_Sugerido": "R$ {:.2f}"
-                    }))
-                else:
-                    st.info("Nenhum aporte sugerido (Carteira balanceada ou Score baixo).")
+                st.dataframe(sug[["Ticker", "Setor", "Peso_Atual", "Peso_Alvo", "Aporte_Sugerido"]].style.format({
+                    "Peso_Atual": "{:.1%}", "Peso_Alvo": "{:.1%}", "Aporte_Sugerido": "R$ {:.2f}"
+                }))
         
         with c2:
             st.write("#### 📉 Stress Test")
             pat = (df_final["Cotação"] * df_final["Qtd"]).sum()
-            st.metric("Patrimônio Ações", f"R$ {pat:,.2f}")
-            if st.button("Rodar Stress"):
+            if st.button("Simular Crises"):
+                motor = MotorAnalise()
+                res_stress = motor.stress_test(pat)
                 fig = go.Figure()
-                for k, v in stress_test(pat).items():
+                for k, v in res_stress.items():
                     fig.add_trace(go.Scatter(y=v, name=k))
                 st.plotly_chart(fig, use_container_width=True)
 
-# ABA 3: FIIs
+# === ABA 3: FIIs & SCANNER ===
 with tabs[2]:
-    st.subheader("Carteira de FIIs")
-    df_fiis = st.data_editor(st.session_state.carteira_fiis, num_rows="dynamic", key="ed_fi", use_container_width=True)
+    st.subheader("Carteira FIIs")
+    df_fiis = st.data_editor(st.session_state.carteira_fiis, num_rows="dynamic", key="ed_fiis", use_container_width=True)
     st.session_state.carteira_fiis = df_fiis
-
-    if st.button("🔄 Calcular FIIs"):
+    
+    if st.button("🔄 Atualizar FIIs"):
         res = []
         for _, row in df_fiis.iterrows():
             r, info = obter_dados(row["Ticker"])
             if r:
-                dy = info.get('dividendYield', 0)
                 res.append({
-                    "Ticker": row["Ticker"], 
-                    "Setor": row["Setor"],
-                    "Preço": r["preco"], 
-                    "DY": f"{dy*100:.2f}%",
-                    "PVP Est.": f"{(r['preco']/r['p_bazin'])*0.6:.2f}" 
+                    "Ticker": row["Ticker"],
+                    "Preço": r["preco"],
+                    "DY": f"{r['dy']*100:.2f}%",
+                    "PVP Est.": f"{(r['preco'] / r['p_bazin']) * 0.6:.2f}"
                 })
         st.session_state.df_fiis_final = pd.DataFrame(res)
         st.rerun()
         
     if "df_fiis_final" in st.session_state:
         st.dataframe(st.session_state.df_fiis_final, use_container_width=True)
-
-# ABA 4: RF
-with tabs[3]:
-    st.subheader("Renda Fixa e PGBL")
-    df_rf = st.data_editor(st.session_state.carteira_rf, num_rows="dynamic", key="ed_rf", use_container_width=True)
-    st.session_state.carteira_rf = df_rf
-    
-    tot_rf = df_rf["Saldo Atual"].sum()
-    st.metric("Total RF", f"R$ {tot_rf:,.2f}")
-    
-    if st.button("Projeção Global (Monte Carlo)"):
-        pat_ac = (st.session_state.df_final_acoes["Cotação"] * st.session_state.df_final_acoes["Qtd"]).sum() if "df_final_acoes" in st.session_state else 0
-        total = tot_rf + pat_ac
         
-        # Simula 2k aporte/mês
-        sims = monte_carlo(total, 2000)
+    st.divider()
+    st.subheader("🔍 Scanner CSV (StatusInvest)")
+    arquivo_csv = "statusinvest-busca-avancada.csv"
+    if os.path.exists(arquivo_csv):
+        try:
+            df_scan = pd.read_csv(arquivo_csv, sep=";", encoding="latin-1")
+            df_scan.columns = df_scan.columns.str.strip().str.upper()
+            
+            # Tratamento de dados numéricos BR
+            cols = ["DY", "P/VP", "VACÂNCIA FISICA"]
+            for c in cols:
+                if c in df_scan.columns:
+                    df_scan[c] = pd.to_numeric(df_scan[c].astype(str).str.replace(".","").str.replace(",",".").str.replace("%",""), errors='coerce')
+            
+            # Filtro Ricardo
+            filtro = (df_scan["DY"] > 6) & (df_scan["P/VP"] < 1.0) & (df_scan["P/VP"] > 0.8)
+            st.success(f"{len(df_scan[filtro])} Oportunidades Encontradas")
+            st.dataframe(df_scan[filtro][["TICKER", "PRECO", "DY", "P/VP", "SEGMENTO"]].sort_values("DY", ascending=False))
+        except Exception as e:
+            st.error(f"Erro no CSV: {e}")
+    else:
+        st.info("Para usar o Scanner Offline, adicione o arquivo 'statusinvest-busca-avancada.csv' na raiz.")
+
+# === ABA 4: RF & PGBL ===
+with tabs[3]:
+    st.subheader("Renda Fixa & Previdência")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("### Carteira RF")
+        df_rf = st.data_editor(st.session_state.carteira_rf, num_rows="dynamic", key="ed_rf", use_container_width=True)
+        st.session_state.carteira_rf = df_rf
+        st.metric("Total RF", f"R$ {df_rf['Saldo Atual'].sum():,.2f}")
+        
+    with col2:
+        st.markdown("### 🛡️ Calculadora Fiscal PGBL")
+        renda = st.number_input("Renda Bruta Anual", 100000.0, step=1000.0)
+        aporte = st.number_input("Aporte PGBL Feito", 12000.0, step=500.0)
+        
+        limite = renda * 0.12
+        restituicao = min(aporte, limite) * 0.275
+        
+        st.metric("Limite de Benefício (12%)", f"R$ {limite:,.2f}")
+        st.metric("Restituição IR Estimada", f"R$ {restituicao:,.2f}", delta="No bolso")
+    
+    st.divider()
+    if st.button("🔮 Simular Futuro (Monte Carlo)"):
+        pat_acoes = (st.session_state.df_final_acoes["Cotação"] * st.session_state.df_final_acoes["Qtd"]).sum() if "df_final_acoes" in st.session_state else 0
+        total_geral = df_rf['Saldo Atual'].sum() + pat_acoes
+        
+        motor = MotorAnalise()
+        sims = motor.monte_carlo(total_geral, 2000)
         
         fig = go.Figure(go.Histogram(x=sims, nbinsx=30))
-        fig.update_layout(title="Patrimônio Projetado (10 Anos)")
+        fig.update_layout(title="Distribuição de Patrimônio (10 anos)")
         st.plotly_chart(fig, use_container_width=True)
