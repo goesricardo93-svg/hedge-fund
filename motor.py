@@ -32,6 +32,7 @@ class MotorAnalise:
         
         vals = [v for v in [p_graham, p_bazin, p_gordon] if v > 0]
         preco_teto = np.mean(vals) if vals else preco_atual
+        upside_perc = ((preco_teto / preco_atual) - 1) * 100
 
         # --- RECOMENDAÇÃO ---
         tendencia = "ALTA" if preco_atual > ma252 else "BAIXA"
@@ -57,6 +58,7 @@ class MotorAnalise:
             "val_bazin": round(p_bazin, 2),
             "val_gordon": round(p_gordon, 2),
             "preco_teto": round(preco_teto, 2),
+            "upside": round(upside_perc, 2),
             "suporte": round(min_252, 2),
             "resistencia": round(max_252, 2),
             "stop_loss": round(preco_atual * 0.97, 2),

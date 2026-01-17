@@ -23,34 +23,28 @@ if ticker:
             df_p = df.reset_index()
             df_p.columns = [str(c).lower() for c in df_p.columns]
             
+            # Passa info para o motor
             res = motor.analisar(df_p, t_obj.info)
             
             if res:
-                # 1. VEREDITO EM DESTAQUE
+                # 1. VEREDITO CENTRALIZADO
                 st.markdown("---")
                 c_map = {"green": "#00CC96", "red": "#FF4B4B", "blue": "#1F77B4", "yellow": "#FFA500", "gray": "#808080"}
                 st.markdown(f"<h2 style='text-align: center; color:{c_map.get(res['cor_sinal'], '#FFF')};'>🎯 Veredito: {res['recomendacao']}</h2>", unsafe_allow_html=True)
 
-                # 2. VALUATIONS E PREÇOS (5 COLUNAS NO TOPO)
+                # 2. VALUATIONS E PREÇOS (5 COLUNAS)
                 st.subheader("💎 Valuation e Comparativo de Preço")
                 v1, v2, v3, v4, v5 = st.columns(5)
-                
                 v1.metric("Graham", f"R$ {res['val_graham']}")
                 v2.metric("Bazin", f"R$ {res['val_bazin']}")
                 v3.metric("Gordon", f"R$ {res['val_gordon']}")
-                
-                # Preço Teto com Delta do potencial de ganho
                 v4.metric("PREÇO TETO", f"R$ {res['preco_teto']}", delta=f"{res['upside']}%")
-                
-                # PREÇO ATUAL EM DESTAQUE
                 v5.metric("PREÇO ATUAL", f"R$ {res['preco']}", delta_color="off")
 
                 # 3. GRÁFICO OPERACIONAL
                 st.markdown("---")
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=df_p['date'], y=df_p['close'], name="Preço", line=dict(color='#00f2ff', width=2)))
-                
-                # Linhas de Sinal
                 fig.add_hline(y=res['stop_loss'], line_color="red", line_dash="dash", annotation_text="STOP LOSS")
                 fig.add_hline(y=res['stop_gain'], line_color="green", line_dash="dash", annotation_text="STOP GAIN")
                 fig.add_hline(y=res['ma252'], line_color="orange", line_dash="dot", annotation_text="MÉDIA 252")
