@@ -10,24 +10,23 @@ class MotorAnalise:
         delta = serie.diff()
         ganho = (delta.where(delta > 0, 0)).rolling(window=window).mean()
         perda = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-        rs = ganho / perda
+        rs = ganho / (perda + 1e-9)
         return 100 - (100 / (1 + rs))
 
     def analisar(self, df):
         if len(df) < 10: return None
         
-        # Cálculos de Médias e RSI
+        # Preenchimento de dados faltantes (comum na B3)
+        df['close'] = df['close'].ffill()
+        
         df['ma252'] = df['close'].rolling(window=min(len(df), self.p_longo)).mean()
         df['rsi_14'] = self.calcular_rsi(df['close'], self.p_curto)
         df['rsi_252'] = self.calcular_rsi(df['close'], self.p_longo)
         
-        preco_atual = df['close'].iloc[-1]
+        preco_atual = float(df['close'].iloc[-1])
+        resistencia_anual = float(df['close'].tail(self.p_longo).max())
+        suporte_anual = float(df['close'].tail(self.p_longo).min())
         
-        # Suporte e Resistência (Máximas e Mínimas do Ano)
-        resistencia_anual = df['close'].tail(self.p_longo).max()
-        suporte_anual = df['close'].tail(self.p_longo).min()
-        
-        # Fibonacci
         diff = resistencia_anual - suporte_anual
         fib = {
             "61.8% (Ouro)": round(resistencia_anual - (0.382 * diff), 2),
