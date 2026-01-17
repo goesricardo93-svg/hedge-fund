@@ -5,62 +5,66 @@ import pandas as pd
 
 st.set_page_config(page_title="Terminal Ricardo", layout="wide")
 
-# Cache para evitar "Muitas Solicitações"
-@st.cache_data(ttl=300)
-def carregar_dados(ticker):
-    data = yf.download(ticker, period="2y", progress=False)
-    info = yf.Ticker(ticker).info
-    return data, info
+@st.cache_data(ttl=600)
+def get_data(ticker):
+    d = yf.download(ticker, period="2y", progress=False)
+    i = yf.Ticker(ticker).info
+    return d, i
 
-def formatar_ticker(t):
-    t = t.strip().upper()
-    if "." in t: return t
-    if t in ["VWRA", "VUSA", "CSPX"]: return f"{t}.L"
-    return f"{t}.SA"
-
-st.sidebar.header("🕹️ Hedge Fund System")
+st.sidebar.header("🕹️ Comando Central")
 ticker_input = st.sidebar.text_input("Ticker:", value="BBSE3")
-ticker_final = formatar_ticker(ticker_input)
+t_final = ticker_input.upper().strip()
+if "." not in t_final:
+    t_final = f"{t_final}.L" if t_final in ["VWRA","VUSA","CSPX"] else f"{t_final}.SA"
 
-tab1, tab2, tab3 = st.tabs(["📊 Terminal de Valor", "🏙️ Scanner FIIs", "🛡️ PGBL"])
+tab1, tab2, tab3 = st.tabs(["📊 Valuation & Trades", "🏙️ Scanner FIIs", "🛡️ PGBL"])
 
 with tab1:
     try:
-        data, info = carregar_dados(ticker_final)
-        if not data.empty:
-            m = MotorAnalise()
-            res = m.analisar(data, info, ticker_final)
-
-            # --- DASHBOARD DE MÉTRICAS ---
+        data, info = get_data(t_final)
+        res = MotorAnalise().analisar(data, info, t_final)
+        
+        if res:
+            # Layout de Métricas Principais
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Preço Atual", f"R$ {res['preco']:.2f}")
-            c2.metric("Preço Teto", f"R$ {res['preco_teto']:.2f}" if res['preco_teto'] > 0 else "N/A", f"{res['upside']:.1f}%")
+            c2.metric("Preço Teto", f"R$ {res['preco_teto']:.2f}", f"{((res['preco_teto']/res['preco'])-1)*100:.1f}%")
             c3.metric("RSI (14d)", f"{res['rsi']:.1f}")
             c4.metric("Tendência", res['tendencia'])
 
-            st.markdown(f"### Veredito: :{res['cor']}[{res['recomendacao']}]")
             st.line_chart(res['precos_serie'])
 
-            # --- INFO BOXES ---
-            col_a, col_b = st.columns(2)
-            col_a.info(f"**Análise de Valor:** Preço Teto baseado em Bazin/Graham. Upside de {res['upside']:.2f}%.")
-            col_b.info(f"**Análise Técnica:** Suporte Anual em R$ {res['suporte']:.2f}. Média 252p em R$ {res['ma252']:.2f}.")
+            # --- TABELA DE VALUATION E STOPS ---
+            st.write("### 🧮 Inteligência de Valor e Operação")
+            col_v, col_s = st.columns(2)
+            
+            with col_v:
+                st.write("**Modelos de Valuation**")
+                st.write(f"- Graham: R$ {res['p_graham']:.2f}")
+                st.write(f"- Bazin (6%): R$ {res['p_bazin']:.2f}")
+                st.write(f"- Gordon: R$ {res['p_gordon']:.2f}")
+            
+            with col_s:
+                st.write("**Gerenciamento de Trade**")
+                st.error(f"Stop Loss (Segurança): R$ {res['stop_loss']:.2f}")
+                st.success(f"Stop Gain (Alvo): R$ {res['stop_gain']:.2f}")
+                st.info(f"Suporte Anual: R$ {res['suporte']:.2f} | Resistência: R$ {res['resistencia']:.2f}")
 
     except Exception as e:
-        st.error(f"Erro no processamento: {e}")
+        st.error(f"Aguarde uns instantes ou verifique o ticker. Erro: {e}")
 
 with tab2:
-    st.header("Scanner de FIIs (CSV)")
+    st.header("Scanner FIIs")
     try:
-        df_fii = pd.read_csv("statusinvest-busca-avancada.csv", sep=";", encoding="utf-8")
-        def clean(c): return pd.to_numeric(df_fii[c].astype(str).str.replace('.','',regex=False).str.replace(',','.',regex=False), errors='coerce')
-        df_fii['P/VP_N'] = clean('P/VP')
-        df_fii['LIQ_N'] = clean('LIQUIDEZ MEDIA DIARIA')
-        f = df_fii[(df_fii['P/VP_N'] >= 0.85) & (df_fii['P/VP_N'] <= 1.0) & (df_fii['LIQ_N'] >= 800000)].copy()
-        st.dataframe(f[['TICKER', 'PRECO', 'P/VP', 'DY', 'LIQUIDEZ MEDIA DIARIA']])
-    except: st.info("Adicione o CSV na pasta.")
+        df = pd.read_csv("statusinvest-busca-avancada.csv", sep=";", encoding="utf-8")
+        def cl(n): return pd.to_numeric(df[n].astype(str).str.replace('.','').str.replace(',','.'), errors='coerce')
+        df['P/VP_N'], df['LIQ_N'] = cl('P/VP'), cl('LIQUIDEZ MEDIA DIARIA')
+        f = df[(df['P/VP_N'] >= 0.85) & (df['P/VP_N'] <= 1.0) & (df['LIQ_N'] >= 800000)].copy()
+        # Adicionando Suporte e Stops no Scanner
+        f['Stop Loss'] = f['PRECO'].str.replace(',','.').astype(float) * 0.95
+        st.dataframe(f[['TICKER', 'PRECO', 'P/VP', 'DY', 'Stop Loss']])
+    except: st.info("CSV não encontrado.")
 
 with tab3:
-    st.header("Planejamento Fiscal")
     r = st.number_input("Renda Anual:", value=200000.0)
     st.metric("Aporte PGBL (12%)", f"R$ {r*0.12:.2f}")
