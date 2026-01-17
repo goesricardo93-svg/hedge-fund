@@ -31,19 +31,17 @@ class MotorAnalise:
         p_gordon = dpa / 0.08 if dpa > 0 else 0
         
         vals = [v for v in [p_graham, p_bazin, p_gordon] if v > 0]
-        p_justo = np.mean(vals) if vals else preco_atual
-        upside = ((p_justo / preco_atual) - 1) * 100
+        preco_teto = np.mean(vals) if vals else preco_atual
 
         # --- RECOMENDAÇÃO ---
         tendencia = "ALTA" if preco_atual > ma252 else "BAIXA"
-        if preco_atual > ma252 and rsi14 < 45:
-            rec, cor = "COMPRA (Desconto Técnico)", "green"
-        elif preco_atual > ma252:
-            rec, cor = "MANTER (Tendência de Alta)", "blue"
+        if preco_atual < preco_teto and preco_atual > (ma252 * 0.95):
+            rec, cor = "COMPRA (Abaixo do Teto)", "green"
+        elif preco_atual > preco_teto:
+            rec, cor = "AGUARDAR (Acima do Teto)", "yellow"
         else:
             rec, cor = "FORA (Tendência de Baixa)", "gray"
 
-        # --- SUPORTE / RESISTÊNCIA / FIBO ---
         max_252 = float(df['close'].tail(252).max())
         min_252 = float(df['close'].tail(252).min())
         diff = max_252 - min_252
@@ -58,7 +56,7 @@ class MotorAnalise:
             "val_graham": round(p_graham, 2),
             "val_bazin": round(p_bazin, 2),
             "val_gordon": round(p_gordon, 2),
-            "upside": round(upside, 2),
+            "preco_teto": round(preco_teto, 2),
             "suporte": round(min_252, 2),
             "resistencia": round(max_252, 2),
             "stop_loss": round(preco_atual * 0.97, 2),

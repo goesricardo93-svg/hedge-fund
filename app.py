@@ -15,38 +15,45 @@ ticker = f"{t_input}.SA" if "-" not in t_input and "." not in t_input and any(c.
 if ticker:
     try:
         t_obj = yf.Ticker(ticker)
-        df = t_obj.history(period="4y")
+        # Força o download limpo para evitar erros de data
+        df = yf.download(ticker, period="4y", progress=False)
         
         if not df.empty:
+            # Tratamento rigoroso para o gráfico não ficar em branco
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
             df_p = df.reset_index()
             df_p.columns = [str(c).lower() for c in df_p.columns]
+            
             res = motor.analisar(df_p, t_obj.info)
             
             if res:
                 # 1. VEREDITO
-                c_map = {"green": "#00CC96", "red": "#FF4B4B", "blue": "#1F77B4", "gray": "#808080"}
+                c_map = {"green": "#00CC96", "red": "#FF4B4B", "blue": "#1F77B4", "yellow": "#FFA500", "gray": "#808080"}
                 st.markdown(f"<h2 style='color:{c_map.get(res['cor_sinal'], '#FFF')};'>🎯 Veredito: {res['recomendacao']}</h2>", unsafe_allow_html=True)
 
-                # 2. VALUATIONS
-                st.subheader("💎 Valuation e Projeção")
+                # 2. VALUATIONS (PREÇO TETO ATUALIZADO)
+                st.subheader("💎 Valuation e Preço Teto")
                 v1, v2, v3, v4 = st.columns(4)
                 v1.metric("Graham", f"R$ {res['val_graham']}")
                 v2.metric("Bazin", f"R$ {res['val_bazin']}")
                 v3.metric("Gordon", f"R$ {res['val_gordon']}")
-                v4.metric("Upside", f"{res['upside']}%")
+                # Alterado de Upside para Preço Teto conforme solicitado
+                v4.metric("PREÇO TETO", f"R$ {res['preco_teto']}", delta=round(res['preco_teto'] - res['preco'], 2))
 
-                # 3. GRÁFICO
+                # 3. GRÁFICO (CORREÇÃO DA LINHA DE EVOLUÇÃO)
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df_p['date'], y=df_p['close'], name="Preço", line=dict(color='white')))
-                # Linhas Técnicas
+                # Adiciona a linha de fechamento (Preço real)
+                fig.add_trace(go.Scatter(x=df_p['date'], y=df_p['close'], name="Evolução do Ativo", line=dict(color='#00f2ff', width=2)))
+                # Linhas de Sinal
                 fig.add_hline(y=res['stop_loss'], line_color="red", line_dash="dash", annotation_text="STOP LOSS")
                 fig.add_hline(y=res['stop_gain'], line_color="green", line_dash="dash", annotation_text="STOP GAIN")
                 fig.add_hline(y=res['ma252'], line_color="orange", line_dash="dot", annotation_text="MÉDIA 252")
                 
-                fig.update_layout(template="plotly_dark", height=500, margin=dict(l=0,r=0,b=0,t=20))
+                fig.update_layout(template="plotly_dark", height=500, margin=dict(l=0,r=0,b=0,t=20), hovermode="x unified")
                 st.plotly_chart(fig, use_container_width=True)
 
-                # 4. TABELAS DE PARÂMETROS (RESTURADAS)
+                # 4. TABELAS DE PARÂMETROS
                 st.markdown("---")
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -64,4 +71,4 @@ if ticker:
                         st.write(f"**{k}:** R$ {v}")
 
     except Exception as e:
-        st.error(f"Erro: {str(e)}")
+        st.error(f"Erro ao carregar dados: {str(e)}")
