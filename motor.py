@@ -16,9 +16,12 @@ class MotorAnalise:
     def analisar(self, df, info=None, ticker=""):
         if df is None or len(df) < 10: return None
         
-        # Ajuste para garantir que tratamos a série de fechamento
-        df_close = df['Close'] if 'Close' in df else df['close']
-        df_close = df_close.ffill()
+        # AJUSTE PARA MULTIINDEX DO YFINANCE:
+        # Pega a coluna 'Close' independente de como ela venha na tabela
+        if isinstance(df.columns, pd.MultiIndex):
+            df_close = df['Close'][ticker].ffill()
+        else:
+            df_close = df['Close'].ffill()
         
         preco_atual = float(df_close.iloc[-1])
         ma252 = df_close.rolling(window=min(len(df_close), self.p_longo)).mean().iloc[-1]
