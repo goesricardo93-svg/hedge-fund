@@ -5,7 +5,6 @@ import pandas as pd
 
 st.set_page_config(page_title="Terminal Ricardo - Hedge Fund", layout="wide")
 
-# Mantemos o cache para estabilidade contra o erro de 'Muitas Solicitações'
 @st.cache_data(ttl=600)
 def carregar_dados_completos(ticker):
     data = yf.download(ticker, period="2y", progress=False)
@@ -38,7 +37,21 @@ with aba1:
             c4.metric("Tendência", res['tendencia'])
 
             st.markdown(f"### Veredito: :{res['cor']}[{res['recomendacao']}]")
-            st.line_chart(res['precos_serie'])
+            
+            # --- PREPARAÇÃO DO GRÁFICO COM LINHAS DE SUPORTE E STOPS ---
+            df_grafico = pd.DataFrame(res['precos_serie'])
+            df_grafico.columns = ['Preço']
+            
+            # Criando as linhas horizontais
+            df_grafico['Suporte'] = res['suporte']
+            df_grafico['Stop Loss'] = res['stop_loss']
+            
+            if res['preco_teto'] > 0:
+                df_grafico['Stop Gain (Alvo)'] = res['stop_gain']
+            
+            # Exibindo o gráfico com todas as linhas
+            st.line_chart(df_grafico, color=["#29b5e8", "#2ecc71", "#e74c3c", "#f1c40f"]) 
+            # Cores: Preço(Azul), Suporte(Verde), StopLoss(Vermelho), StopGain(Amarelo)
 
             # --- BLOCOS DE ANÁLISE DETALHADA ---
             col_val, col_tec, col_risk = st.columns(3)
@@ -65,9 +78,9 @@ with aba1:
     except Exception as e:
         st.error(f"Erro ao processar {ticker_final}: {e}")
 
-# Aba 2 e 3 seguem a mesma lógica funcional do CSV e PGBL já validados
+# Aba 2 e 3 (Mantidas)
 with aba2:
-    st.header("Scanner de FIIs (Filtro Ricardo: 0.85 - 1.00)")
+    st.header("Scanner de FIIs")
     try:
         df_fii = pd.read_csv("statusinvest-busca-avancada.csv", sep=";", encoding="utf-8")
         def cl(n): return pd.to_numeric(df_fii[n].astype(str).str.replace('.','').str.replace(',','.'), errors='coerce')
