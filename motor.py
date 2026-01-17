@@ -1,49 +1,63 @@
-import yfinance as yf
-import pandas_ta as ta
+import pandas as pd
+import numpy as np
 
-def analisar_ativo(ticker):
-    df = yf.download(ticker, period="1y", interval="1d")
-    if df.empty or len(df) < 50: return None
+class MotorAnalise:
+    def __init__(self):
+        self.p_curto = 14
+        self.p_longo = 252
 
-    # Limpeza de colunas
-    df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
+    def calcular_rsi(self, serie, window):
+        delta = serie.diff()
+        ganho = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+        perda = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+        rs = ganho / perda
+        return 100 - (100 / (1 + rs))
 
-    # Indicadores
-    df['RSI'] = ta.rsi(df['Close'], length=14)
-    df['SMA_20'] = ta.sma(df['Close'], length=20)
-    df['SMA_200'] = ta.sma(df['Close'], length=200)
-    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
-    df = df.dropna()
+    def processar_df(self, df):
+        # Garante que os dados estão em ordem cronológica
+        df = df.sort_index()
+        
+        # Médias Móveis
+        df['ma20'] = df['close'].rolling(window=20).mean()
+        df['ma252'] = df['close'].rolling(window=self.p_longo).mean()
 
-    # Suportes e Resistências
-    resistencia = float(df['High'].tail(60).max())
-    suporte = float(df['Low'].tail(60).min())
+        # RSIs
+        df['rsi_14'] = self.calcular_rsi(df['close'], self.p_curto)
+        df['rsi_252'] = self.calcular_rsi(df['close'], self.p_longo)
+        
+        # Identificação de Topos e Fundos para Divergência
+        df['topo'] = (df['close'] > df['close'].shift(1)) & (df['close'] > df['close'].shift(-1))
+        df['fundo'] = (df['close'] < df['close'].shift(1)) & (df['close'] < df['close'].shift(-1))
+        
+        return df
 
-    # Fibonacci (Ciclo de 90 dias)
-    topo_f = float(df['High'].tail(90).max())
-    fundo_f = float(df['Low'].tail(90).min())
-    dist = topo_f - fundo_f
-    fibo_50 = topo_f - (0.5 * dist)
-    fibo_618 = topo_f - (0.618 * dist)
+    def detectar_divergencia(self, df):
+        indices_topos = df.index[df['topo']].tolist()
+        if len(indices_topos) < 2: return "NEUTRO"
 
-    # Preço e RSI Atual
-    preco_atual = float(df['Close'].iloc[-1])
-    rsi_atual = float(df['RSI'].iloc[-1])
+        # Últimos dois topos para análise macro (252p)
+        t1, t2 = indices_topos[-2], indices_topos[-1]
+        
+        preco_subiu = df['close'].iloc[t2] > df['close'].iloc[t1]
+        rsi_caiu = df['rsi_252'].iloc[t2] < df['rsi_252'].iloc[t1]
 
-    # Lógica de Alvo (Expansão 61.8%) e Stop
-    stop_gain = topo_f + (0.618 * dist)
-    stop_loss = suporte * 0.98
+        if preco_subiu and rsi_caiu and df['rsi_252'].iloc[t2] > 50:
+            return "BAIXA MACRO (Divergência)"
+        
+        # Tendência simples por Média
+        if df['close'].iloc[-1] > df['ma252'].iloc[-1]:
+            return "ALTA (Acima da MA252)"
+        
+        return "TENDÊNCIA DE BAIXA"
 
-    # Score
-    score = 50
-    if rsi_atual > 70: score -= 40
-    elif rsi_atual < 35: score += 30
-    if preco_atual > float(df['SMA_20'].iloc[-1]): score += 10
-
-    return {
-        "df": df, "ticker": ticker, "preco": round(preco_atual, 2),
-        "score": int(score), "rsi": round(rsi_atual, 2),
-        "suporte": round(suporte, 2), "resistencia": round(resistencia, 2),
-        "fibo_50": round(fibo_50, 2), "fibo_618": round(fibo_618, 2),
-        "stop": round(stop_loss, 2), "alvo": round(stop_gain, 2)
-    }
+    def analisar(self, dados_brutos):
+        df = self.processar_df(dados_brutos)
+        if len(df) < self.p_longo:
+            return {"status": "Dados Insuficientes (Mín. 252 dias)"}
+        
+        return {
+            "preco": round(df['close'].iloc[-1], 2),
+            "rsi_252": round(df['rsi_252'].iloc[-1], 2),
+            "ma252": round(df['ma252'].iloc[-1], 2),
+            "sinal": self.detectar_divergencia(df)
+        }

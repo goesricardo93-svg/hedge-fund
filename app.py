@@ -1,50 +1,43 @@
-import streamlit as st
-from motor import analisar_ativo
-import matplotlib.pyplot as plt
+import yfinance as yf
+from Motor import MotorAnalise
+import time
 
-st.set_page_config(page_title="Hedge Fund Pro", layout="wide")
-st.title("📈 Terminal Quantitativo: Fibonacci & Price Action")
+def rodar_painel():
+    # Sua lista de ativos personalizada
+    watchlist = ["BTC-USD", "ETH-USD", "PETR4.SA", "VALE3.SA", "AAPL", "TSLA"]
+    motor = MotorAnalise()
+    
+    print("\n" + "="*60)
+    print(f"{'ATIVO':<12} | {'PREÇO':<10} | {'RSI 252':<8} | {'SINAL MACRO'}")
+    print("="*60)
 
-ticker = st.text_input("Digite o Ticker (ex: VALE3.SA):", "VALE3.SA")
+    for ticker in watchlist:
+        try:
+            # Baixa 3 anos para garantir os 252 períodos úteis
+            data = yf.download(ticker, period="3y", progress=False)
+            if data.empty: continue
+            
+            # Formatação básica para o Motor
+            data = data.reset_index()
+            data.columns = [c.lower() for c in data.columns]
+            
+            # Se a API trouxer colunas multi-index (comum no yfinance novo), limpamos:
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.get_level_values(0)
 
-if st.button("Executar Análise"):
-    res = analisar_ativo(ticker)
-    if res:
-        # Métricas de Topo
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Preço Atual", f"R$ {res['preco']}")
-        col2.metric("Score", f"{res['score']}/100")
-        col3.metric("RSI", f"{res['rsi']}")
-        col4.metric("ALVO (Gain)", f"R$ {res['alvo']}")
+            res = motor.analisar(data)
+            
+            # Lógica de ícones para o Painel
+            icone = "⚪"
+            if "ALTA" in res['sinal']: icone = "🟢"
+            if "BAIXA" in res['sinal']: icone = "🔴"
 
-        # Gráfico Profissional
-        fig, ax = plt.subplots(figsize=(12, 6))
-        ax.plot(res['df']['Close'], label="Preço", color='black', alpha=0.7)
+            print(f"{ticker:<12} | {res['preco']:<10.2f} | {res.get('rsi_252', 'N/A'):<8} | {icone} {res['sinal']}")
+            
+        except Exception as e:
+            print(f"{ticker:<12} | Erro no processamento.")
         
-        # Linhas de Referência
-        ax.axhline(res['resistencia'], color='red', linestyle='--', alpha=0.5, label="Resistência")
-        ax.axhline(res['suporte'], color='blue', linestyle='--', alpha=0.5, label="Suporte")
-        ax.axhline(res['fibo_50'], color='orange', linestyle=':', label="Fibo 50%")
-        
-        # LINHAS DE EXECUÇÃO (Stop e Gain)
-        ax.axhline(res['alvo'], color='green', linewidth=3, label=f"STOP GAIN (R$ {res['alvo']})")
-        ax.axhline(res['stop'], color='darkred', linewidth=3, label=f"STOP LOSS (R$ {res['stop']})")
-        
-        # Pintar zona de lucro
-        ax.fill_between(res['df'].index, res['preco'], res['alvo'], color='green', alpha=0.1)
+        time.sleep(0.2) # Evita bloqueio da API
 
-        ax.legend(loc='upper left', ncol=2)
-        ax.set_title(f"Análise de Fibonacci: {ticker}")
-        st.pyplot(fig)
-
-        # Tabela Final
-        st.subheader("📊 Resumo da Estratégia")
-        st.table({
-            "Nível Técnico": ["Stop Gain (Projeção 61.8%)", "Resistência Relevante", "Ponto 50% Fibo", "Suporte Relevante", "Stop Loss (Risco)"],
-            "Preço (R$)": [res['alvo'], res['resistencia'], res['fibo_50'], res['suporte'], res['stop']]
-        })
-
-        if res['rsi'] > 70:
-            st.warning("⚠️ Ativo em zona de TOPO (Sobrecomprado). RSI alto.")
-    else:
-        st.error("Erro ao carregar dados.")
+if __name__ == "__main__":
+    rodar_painel()
