@@ -16,12 +16,17 @@ class MotorAnalise:
     def analisar(self, df, info=None, ticker=""):
         if df is None or len(df) < 10: return None
         
-        # AJUSTE PARA MULTIINDEX DO YFINANCE:
-        # Pega a coluna 'Close' independente de como ela venha na tabela
+        # --- AJUSTE MULTIINDEX (CORREÇÃO DO ERRO) ---
         if isinstance(df.columns, pd.MultiIndex):
-            df_close = df['Close'][ticker].ffill()
+            # Tenta pegar Close, se não, Adj Close
+            if 'Close' in df.columns.get_level_values(0):
+                df_close = df['Close'][ticker]
+            else:
+                df_close = df['Adj Close'][ticker]
         else:
-            df_close = df['Close'].ffill()
+            df_close = df['Close'] if 'Close' in df.columns else df['Adj Close']
+            
+        df_close = df_close.ffill().dropna()
         
         preco_atual = float(df_close.iloc[-1])
         ma252 = df_close.rolling(window=min(len(df_close), self.p_longo)).mean().iloc[-1]
@@ -69,7 +74,6 @@ class MotorAnalise:
 
         min_252 = float(df_close.tail(252).min())
         max_252 = float(df_close.tail(252).max())
-        diff = max_252 - min_252
 
         return {
             "tipo": tipo_label,
@@ -80,6 +84,5 @@ class MotorAnalise:
             "cor": cor,
             "preco_teto": preco_teto,
             "suporte": min_252,
-            "resistencia": max_252,
-            "fib": {"50%": max_252 - 0.5*diff}
+            "resistencia": max_252
         }
