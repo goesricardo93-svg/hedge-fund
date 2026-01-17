@@ -9,6 +9,11 @@ motor = MotorAnalise()
 
 st.title("🏛️ Terminal Hedge Fund - Inteligência Total")
 
+# Barra Lateral para Configurações de Capital
+st.sidebar.header("⚙️ Gestão de Banca")
+capital_total = st.sidebar.number_input("Seu Capital Total (R$):", value=50000.0, step=1000.0)
+risco_por_op = st.sidebar.slider("Risco Máximo por Operação (%):", 0.5, 5.0, 1.0) / 100
+
 t_input = st.text_input("Consultar Ativo:", value="PETR4").upper().strip()
 ticker = f"{t_input}.SA" if "-" not in t_input and "." not in t_input and any(c.isdigit() for c in t_input) else t_input
 
@@ -26,51 +31,47 @@ if ticker:
             res = motor.analisar(df_p, t_obj.info)
             
             if res:
-                # 1. VEREDITO CENTRALIZADO
+                # 1. VEREDITO
                 st.markdown("---")
                 c_map = {"green": "#00CC96", "red": "#FF4B4B", "blue": "#1F77B4", "yellow": "#FFA500", "gray": "#808080"}
                 st.markdown(f"<h2 style='text-align: center; color:{c_map.get(res['cor_sinal'], '#FFF')};'>🎯 Veredito: {res['recomendacao']}</h2>", unsafe_allow_html=True)
 
-                # 2. VALUATIONS E PREÇOS NO TOPO
-                st.subheader("💎 Valuation e Comparativo de Preço")
+                # 2. VALUATIONS E PREÇOS
                 v1, v2, v3, v4, v5 = st.columns(5)
                 v1.metric("Graham", f"R$ {res['val_graham']}")
                 v2.metric("Bazin", f"R$ {res['val_bazin']}")
                 v3.metric("Gordon", f"R$ {res['val_gordon']}")
                 v4.metric("PREÇO TETO", f"R$ {res['preco_teto']}", delta=f"{res['upside']}%")
-                v5.metric("PREÇO ATUAL", f"R$ {res['preco']}", delta_color="off")
+                v5.metric("PREÇO ATUAL", f"R$ {res['preco']}")
 
-                # 3. MÉTRICAS AUXILIARES (RSI VOLTOU AQUI)
+                # 3. CALCULADORA DE LOTE (NOVIDADE)
                 st.markdown("---")
-                m1, m2, m3 = st.columns(3)
-                m1.metric("RSI (Índice de Força)", res['rsi_14'], help="Abaixo de 30: Sobrevendido (Compra). Acima de 70: Sobrecomprado (Venda).")
-                m2.metric("Tendência Macro", res['tendencia'])
-                m3.metric("Média 252p", f"R$ {res['ma252']}")
+                st.subheader("📏 Calculadora de Exposição (Gerenciamento de Risco)")
+                
+                distancia_stop = res['preco'] - res['stop_loss']
+                perda_maxima_financeira = capital_total * risco_por_op
+                
+                if distancia_stop > 0:
+                    lote_sugerido = int(perda_maxima_financeira / distancia_stop)
+                    financeiro_total = lote_sugerido * res['preco']
+                    
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Qtd. de Ações (Lote)", f"{lote_sugerido} papéis")
+                    c2.metric("Valor do Investimento", f"R$ {financeiro_total:,.2f}")
+                    c3.metric("Risco Caso Stopado", f"R$ {perda_maxima_financeira:,.2f}", delta="-1% do Capital", delta_color="inverse")
+                    
+                    st.warning(f"⚠️ Se o preço cair para **R$ {res['stop_loss']}**, você vende tudo e perde apenas R$ {perda_maxima_financeira:,.2f} do seu patrimônio de R$ {capital_total:,.2f}.")
+                else:
+                    st.error("Preço atual está abaixo do suporte. Não há margem para cálculo de lote.")
 
-                # 4. GRÁFICO OPERACIONAL
+                # 4. GRÁFICO E TABELAS
+                st.markdown("---")
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=df_p['date'], y=df_p['close'], name="Preço", line=dict(color='#00f2ff', width=2)))
-                fig.add_hline(y=res['stop_loss'], line_color="red", line_dash="dash", annotation_text="STOP LOSS")
-                fig.add_hline(y=res['stop_gain'], line_color="green", line_dash="dash", annotation_text="STOP GAIN")
-                
-                fig.update_layout(template="plotly_dark", height=500, margin=dict(l=0,r=0,b=0,t=20), hovermode="x unified")
+                fig.add_hline(y=res['stop_loss'], line_color="red", line_dash="dash", annotation_text="STOP LOSS (SUPORTE)")
+                fig.add_hline(y=res['stop_gain'], line_color="green", line_dash="dash", annotation_text="ALVO (TETO)")
+                fig.update_layout(template="plotly_dark", height=500)
                 st.plotly_chart(fig, use_container_width=True)
 
-                # 5. TABELAS DE PARÂMETROS
-                st.markdown("---")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.subheader("🛡️ Gestão de Risco")
-                    st.error(f"**STOP LOSS:** R$ {res['stop_loss']}")
-                    st.success(f"**STOP GAIN:** R$ {res['stop_gain']}")
-                with col2:
-                    st.subheader("🚧 Barreiras Anuais")
-                    st.warning(f"**RESISTÊNCIA:** R$ {res['resistencia']}")
-                    st.info(f"**SUPORTE:** R$ {res['suporte']}")
-                with col3:
-                    st.subheader("📐 Fibonacci")
-                    for k, v in res['fibonacci'].items():
-                        st.write(f"**{k}:** R$ {v}")
-
     except Exception as e:
-        st.error(f"Erro ao carregar dados: {str(e)}")
+        st.error(f"Erro: {str(e)}")
