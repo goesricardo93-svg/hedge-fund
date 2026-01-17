@@ -1,5 +1,6 @@
 import yfinance as yf
-from Motor import MotorAnalise
+import pandas as pd
+from motor import MotorAnalise  # Ajustado para minúsculo conforme seu arquivo
 import time
 
 def rodar_painel():
@@ -15,19 +16,27 @@ def rodar_painel():
         try:
             # Baixa 3 anos para garantir os 252 períodos úteis
             data = yf.download(ticker, period="3y", progress=False)
-            if data.empty: continue
             
-            # Formatação básica para o Motor
+            if data.empty:
+                print(f"{ticker:<12} | Erro: Dados vazios.")
+                continue
+            
+            # Limpeza de colunas para garantir que o Motor entenda
             data = data.reset_index()
             data.columns = [c.lower() for c in data.columns]
             
-            # Se a API trouxer colunas multi-index (comum no yfinance novo), limpamos:
+            # Ajuste para versões novas do yfinance (MultiIndex)
             if isinstance(data.columns, pd.MultiIndex):
                 data.columns = data.columns.get_level_values(0)
 
+            # Executa a análise no Motor
             res = motor.analisar(data)
             
-            # Lógica de ícones para o Painel
+            if "status" in res:
+                print(f"{ticker:<12} | {res['status']}")
+                continue
+
+            # Lógica de ícones
             icone = "⚪"
             if "ALTA" in res['sinal']: icone = "🟢"
             if "BAIXA" in res['sinal']: icone = "🔴"
@@ -35,9 +44,9 @@ def rodar_painel():
             print(f"{ticker:<12} | {res['preco']:<10.2f} | {res.get('rsi_252', 'N/A'):<8} | {icone} {res['sinal']}")
             
         except Exception as e:
-            print(f"{ticker:<12} | Erro no processamento.")
+            print(f"{ticker:<12} | Erro: {str(e)[:30]}...")
         
-        time.sleep(0.2) # Evita bloqueio da API
+        time.sleep(0.2)
 
 if __name__ == "__main__":
     rodar_painel()
