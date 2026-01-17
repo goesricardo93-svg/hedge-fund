@@ -16,16 +16,17 @@ class MotorAnalise:
     def analisar(self, df, info=None, ticker=""):
         if df is None or len(df) < 10: return None
         
-        df['close'] = df['close'].ffill()
-        preco_atual = float(df['close'].iloc[-1])
-        ma252 = df['close'].rolling(window=min(len(df), self.p_longo)).mean().iloc[-1]
-        rsi14 = self.calcular_rsi(df['close'], self.p_curto).iloc[-1]
+        # Ajuste para garantir que tratamos a série de fechamento
+        df_close = df['Close'] if 'Close' in df else df['close']
+        df_close = df_close.ffill()
         
-        # Identificação de Tipo de Ativo
+        preco_atual = float(df_close.iloc[-1])
+        ma252 = df_close.rolling(window=min(len(df_close), self.p_longo)).mean().iloc[-1]
+        rsi14 = self.calcular_rsi(df_close, self.p_curto).iloc[-1]
+        
         is_etf = ".L" in ticker or (info and info.get('quoteType') == 'ETF')
         is_fii = ticker.endswith('11.SA') and not is_etf
 
-        # --- VALUATION ESPECÍFICO ---
         lpa = info.get('trailingEps', 0) if info else 0
         vpa = info.get('bookValue', 0) if info else 0
         dpa = info.get('dividendRate', 0) if info else 0
@@ -35,7 +36,6 @@ class MotorAnalise:
 
         if is_etf:
             tipo_label = "UCITS (IRLANDA)"
-            preco_teto = 0 # ETFs de acúmulo não usam Bazin clássico
         elif is_fii:
             tipo_label = "FII"
             preco_teto = dpa / 0.06 if dpa > 0 else 0
@@ -45,7 +45,6 @@ class MotorAnalise:
             vals = [v for v in [p_graham, p_bazin] if v > 0]
             preco_teto = np.mean(vals) if vals else 0
 
-        # --- MATRIZ DE DECISÃO (CRUZAMENTO TÉCNICO + FUNDAMENTAL) ---
         tendencia_alta = preco_atual > ma252
         sobrecomprado = rsi14 > 68
         sobrevendido = rsi14 < 35
@@ -65,9 +64,8 @@ class MotorAnalise:
             else:
                 rec, cor = "NEUTRO / AGUARDAR", "gray"
 
-        # --- SUPORTES E FIBONACCI ---
-        min_252 = float(df['close'].tail(252).min())
-        max_252 = float(df['close'].tail(252).max())
+        min_252 = float(df_close.tail(252).min())
+        max_252 = float(df_close.tail(252).max())
         diff = max_252 - min_252
 
         return {
@@ -80,5 +78,5 @@ class MotorAnalise:
             "preco_teto": preco_teto,
             "suporte": min_252,
             "resistencia": max_252,
-            "fib": {"61.8%": max_252 - 0.382*diff, "50%": max_252 - 0.5*diff}
+            "fib": {"50%": max_252 - 0.5*diff}
         }
