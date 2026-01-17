@@ -9,54 +9,59 @@ motor = MotorAnalise()
 
 st.title("🏛️ Terminal Hedge Fund - Inteligência Total")
 
-ticker_raw = st.text_input("Consultar Ativo (Ex: PETR4, BBAS3, AAPL):", value="PETR4").upper().strip()
-ticker = f"{ticker_raw}.SA" if "-" not in ticker_raw and "." not in ticker_raw and any(c.isdigit() for c in ticker_raw) else ticker_raw
+t_input = st.text_input("Consultar Ativo:", value="PETR4").upper().strip()
+ticker = f"{t_input}.SA" if "-" not in t_input and "." not in t_input and any(c.isdigit() for c in t_input) else t_input
 
 if ticker:
     try:
-        obj = yf.Ticker(ticker)
-        df = obj.history(period="4y")
+        t_obj = yf.Ticker(ticker)
+        df = t_obj.history(period="4y")
         
         if not df.empty:
-            df_proc = df.reset_index()
-            df_proc.columns = [str(c).lower() for c in df_proc.columns]
-            
-            # Passa o 'obj.info' para o motor calcular Valuation
-            res = motor.analisar(df_proc, obj.info)
+            df_p = df.reset_index()
+            df_p.columns = [str(c).lower() for c in df_p.columns]
+            res = motor.analisar(df_p, t_obj.info)
             
             if res:
                 # 1. VEREDITO
-                st.markdown("---")
-                color_map = {"green": "#00CC96", "red": "#FF4B4B", "blue": "#1F77B4", "yellow": "#FFA500", "gray": "#808080"}
-                cor = color_map.get(res['cor_sinal'], "#FFFFFF")
-                st.markdown(f"<h2 style='color:{cor};'>🎯 Veredito: {res['recomendacao']}</h2>", unsafe_allow_html=True)
+                c_map = {"green": "#00CC96", "red": "#FF4B4B", "blue": "#1F77B4", "gray": "#808080"}
+                st.markdown(f"<h2 style='color:{c_map.get(res['cor_sinal'], '#FFF')};'>🎯 Veredito: {res['recomendacao']}</h2>", unsafe_allow_html=True)
 
-                # 2. MÉTRICAS E VALUATION
+                # 2. VALUATIONS
                 st.subheader("💎 Valuation e Projeção")
                 v1, v2, v3, v4 = st.columns(4)
-                v1.metric(" Graham", f"R$ {res['val_graham']}")
-                v2.metric(" Bazin", f"R$ {res['val_bazin']}")
-                v3.metric(" Gordon", f"R$ {res['val_gordon']}")
-                v4.metric("Upside Longo Prazo", f"{res['upside_longo_prazo']}%")
+                v1.metric("Graham", f"R$ {res['val_graham']}")
+                v2.metric("Bazin", f"R$ {res['val_bazin']}")
+                v3.metric("Gordon", f"R$ {res['val_gordon']}")
+                v4.metric("Upside", f"{res['upside']}%")
 
-                # 3. GRÁFICO OPERACIONAL
-                st.markdown("---")
+                # 3. GRÁFICO
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df_proc['date'], y=df_proc['close'], name="Preço", line=dict(color='white')))
+                fig.add_trace(go.Scatter(x=df_p['date'], y=df_p['close'], name="Preço", line=dict(color='white')))
+                # Linhas Técnicas
                 fig.add_hline(y=res['stop_loss'], line_color="red", line_dash="dash", annotation_text="STOP LOSS")
                 fig.add_hline(y=res['stop_gain'], line_color="green", line_dash="dash", annotation_text="STOP GAIN")
-                fig.update_layout(template="plotly_dark", height=500)
+                fig.add_hline(y=res['ma252'], line_color="orange", line_dash="dot", annotation_text="MÉDIA 252")
+                
+                fig.update_layout(template="plotly_dark", height=500, margin=dict(l=0,r=0,b=0,t=20))
                 st.plotly_chart(fig, use_container_width=True)
 
-                # 4. TABELA DE RISCO
-                col1, col2 = st.columns(2)
+                # 4. TABELAS DE PARÂMETROS (RESTURADAS)
+                st.markdown("---")
+                col1, col2, col3 = st.columns(3)
                 with col1:
                     st.subheader("🛡️ Gestão de Risco")
                     st.write(f"**STOP LOSS:** R$ {res['stop_loss']}")
                     st.write(f"**STOP GAIN:** R$ {res['stop_gain']}")
+                    st.write(f"**PREÇO ATUAL:** R$ {res['preco']}")
                 with col2:
+                    st.subheader("🚧 Barreiras Anuais")
+                    st.write(f"**RESISTÊNCIA:** R$ {res['resistencia']}")
+                    st.write(f"**SUPORTE:** R$ {res['suporte']}")
+                with col3:
                     st.subheader("📐 Fibonacci")
-                    st.write(res['fibonacci'])
+                    for k, v in res['fibonacci'].items():
+                        st.write(f"**{k}:** R$ {v}")
 
     except Exception as e:
         st.error(f"Erro: {str(e)}")
