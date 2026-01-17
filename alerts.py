@@ -1,31 +1,44 @@
 import smtplib
 import requests
+import streamlit as st
 from email.mime.text import MIMEText
 
-SMTP_SERVER = "smtp.office365.com"
-SMTP_PORT = 587
-
-def enviar_telegram(token, chat_id, msg):
-    if not token:
-        return
+def get_secrets():
+    # Tenta pegar segredos, retorna vazios se falhar para não quebrar o app
     try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        requests.post(url, data={"chat_id": chat_id, "text": msg})
+        return {
+            "tg_token": st.secrets["telegram"]["token"],
+            "tg_chat": st.secrets["telegram"]["chat_id"],
+            "email_user": st.secrets["email"]["user"],
+            "email_pass": st.secrets["email"]["password"]
+        }
     except:
-        pass
+        return {"tg_token": "", "tg_chat": "", "email_user": "", "email_pass": ""}
 
-def enviar_email(user, password, msg):
-    if not user:
-        return
+def enviar_telegram(msg):
+    creds = get_secrets()
+    if not creds["tg_token"]: return
     try:
-        email = MIMEText(msg)
-        email["Subject"] = "🚨 ALERTA – HEDGE FUND"
-        email["From"] = user
-        email["To"] = user
+        url = f"https://api.telegram.org/bot{creds['tg_token']}/sendMessage"
+        requests.post(url, data={"chat_id": creds["tg_chat"], "text": msg, "parse_mode": "Markdown"})
+    except: pass
 
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+def enviar_email(msg):
+    creds = get_secrets()
+    if not creds["email_user"]: return
+    try:
+        message = MIMEText(msg)
+        message["Subject"] = "🚨 ALERTA HEDGE FUND"
+        message["From"] = creds["email_user"]
+        message["To"] = creds["email_user"]
+        
+        with smtplib.SMTP("smtp.office365.com", 587) as server:
             server.starttls()
-            server.login(user, password)
-            server.send_message(email)
-    except:
-        pass
+            server.login(creds["email_user"], creds["email_pass"])
+            server.send_message(message)
+    except: pass
+
+def disparar_alerta(titulo, corpo):
+    texto = f"🚨 *{titulo}*\n\n{corpo}"
+    enviar_telegram(texto)
+    enviar_email(texto)

@@ -4,105 +4,141 @@ import pandas as pd
 import plotly.graph_objects as go
 import datetime
 
-from motor import MotorAnalise
-from alerts import enviar_telegram, enviar_email
-
-st.set_page_config("Hedge Fund Ricardo | FINAL", layout="wide")
-
-# SEGREDOS
+# --- IMPORTS MODULARES ---
+# Se der erro aqui, é porque os arquivos não estão na mesma pasta no GitHub
 try:
-    TG_TOKEN = st.secrets["telegram"]["token"]
-    TG_CHAT = st.secrets["telegram"]["chat_id"]
-    EMAIL_USER = st.secrets["email"]["user"]
-    EMAIL_PASS = st.secrets["email"]["password"]
-except:
-    TG_TOKEN = TG_CHAT = EMAIL_USER = EMAIL_PASS = ""
+    from motor import MotorAnalise
+    from alerts import disparar_alerta
+    from scanner import scanner_fiis_csv
+except ImportError as e:
+    st.error(f"Erro Crítico: Arquivos de módulo não encontrados ({e}). Verifique se motor.py, alerts.py e scanner.py estão na raiz do GitHub.")
+    st.stop()
 
+# ======================================================
+# CONFIGURAÇÃO
+# ======================================================
+st.set_page_config(page_title="Hedge Fund Ricardo | Modular", layout="wide")
 motor = MotorAnalise()
 
+# ======================================================
+# CACHE DE DADOS (CRUCIAL)
+# ======================================================
 @st.cache_data(ttl=3600)
-def obter_dados(ticker):
-    t = yf.Ticker(ticker)
-    hist = t.history(period="2y")
-    if hist.empty:
-        return None
-    info = t.info or {}
-    return motor.analisar(hist, info, ticker), hist
+def get_data_ia(ticker):
+    try:
+        t = yf.Ticker(ticker)
+        hist = t.history(period="2y")
+        if hist.empty: return None
+        # O motor retorna um dicionário simples, perfeito para cache
+        return motor.analisar(hist, t.info, ticker)
+    except: return None
 
-if "alertas_diarios" not in st.session_state:
-    st.session_state.alertas_diarios = {}
+# ======================================================
+# DADOS SESSION STATE
+# ======================================================
+if "carteira" not in st.session_state:
+    st.session_state.carteira = pd.DataFrame([
+        ["BBAS3.SA", "Bancos"], ["VALE3.SA", "Mineração"], 
+        ["TAEE11.SA", "Elétricas"], ["PETR4.SA", "Petróleo"],
+        ["WEGE3.SA", "Industrial"], ["ITSA4.SA", "Holding"]
+    ], columns=["Ticker", "Setor"])
 
-st.sidebar.title("📊 Hedge Fund Ricardo")
-ticker = st.sidebar.text_input("Ticker", "BBAS3.SA").upper()
+if "alertas_hoje" not in st.session_state:
+    st.session_state.alertas_hoje = []
 
-tabs = st.tabs(["🔎 Análise", "💼 Carteira", "🏆 Ranking", "📈 Monte Carlo"])
+# ======================================================
+# INTERFACE
+# ======================================================
+st.sidebar.title("🏛️ Terminal Ricardo")
+ticker_input = st.sidebar.text_input("Ticker", "BBAS3.SA").upper()
 
-# --- ABA 1
+tabs = st.tabs(["🔎 Raio-X IA", "🏆 Ranking & Alertas", "🏢 Scanner FIIs"])
+
+# --- ABA 1: RAIO-X ---
 with tabs[0]:
-    r, hist = obter_dados(ticker)
+    r = get_data_ia(ticker_input)
+    
     if r:
-        st.metric("Score IA", r["score_ia"])
-        st.subheader(r["decisao_ia"])
-        st.caption(r["motivos"])
+        # 1. Cabeçalho de Decisão
+        c1, c2 = st.columns([1, 3])
+        c1.metric("Score IA", f"{r['score_ia']}/100")
+        if "COMPRA" in r['decisao_ia']:
+            c2.success(f"### {r['decisao_ia']}")
+        elif "VENDA" in r['decisao_ia']:
+            c2.error(f"### {r['decisao_ia']}")
+        else:
+            c2.warning(f"### {r['decisao_ia']}")
+        st.caption(f"**Motivos:** {r['motivos']}")
+        
+        st.divider()
 
-        fig = go.Figure(go.Candlestick(
-            x=hist.index,
-            open=hist["Open"],
-            high=hist["High"],
-            low=hist["Low"],
-            close=hist["Close"]
-        ))
-        st.plotly_chart(fig, use_container_width=True)
+        # 2. Métricas Técnicas e Fundamentais
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Preço", f"R$ {r['preco']:.2f}")
+        k2.metric("Teto Bazin", f"R$ {r['p_bazin']:.2f}", delta=f"{r['p_bazin']-r['preco']:.2f}")
+        k3.metric("Justo Graham", f"R$ {r['p_graham']:.2f}")
+        k4.metric("RSI (14)", f"{r['rsi']:.0f}")
 
-# --- ABA 2
+        # 3. Gráfico Técnico
+        hist = yf.download(ticker_input, period="2y", progress=False)
+        if not hist.empty:
+            # Tratamento para multi-index do yfinance novo
+            close = hist["Close"] if "Close" in hist else hist.iloc[:,0]
+            
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=hist.index, y=close, name="Preço", line_color='blue'))
+            
+            # Linhas de Suporte/Resistência calculadas pelo Motor
+            fig.add_hline(y=r['stop_gain'], line_dash="dash", line_color="green", annotation_text="ALVO")
+            fig.add_hline(y=r['stop_loss'], line_dash="dash", line_color="red", annotation_text="STOP")
+            fig.add_hline(y=r['suporte'], line_dash="dot", line_color="grey", annotation_text="SUPORTE")
+            
+            st.plotly_chart(fig, use_container_width=True)
+
+# --- ABA 2: RANKING & ALERTAS ---
 with tabs[1]:
-    if "carteira" not in st.session_state:
-        st.session_state.carteira = pd.DataFrame([
-            ["BBAS3.SA", "Bancos"],
-            ["VALE3.SA", "Mineração"],
-            ["PETR4.SA", "Petróleo"]
-        ], columns=["Ticker", "Setor"])
+    st.subheader("🏆 Ranking Automático da Carteira")
+    
+    if st.button("🔄 Processar Ranking IA"):
+        resultados = []
+        bar = st.progress(0)
+        lista = st.session_state.carteira["Ticker"].tolist()
+        
+        for i, tick in enumerate(lista):
+            dados = get_data_ia(tick)
+            if dados:
+                # Lógica de Alerta Automático
+                chave_alerta = f"{tick}_{datetime.date.today()}"
+                if dados['score_ia'] >= 75 and chave_alerta not in st.session_state.alertas_hoje:
+                    disparar_alerta(
+                        f"OPORTUNIDADE: {tick}",
+                        f"Score IA: {dados['score_ia']}\nPreço: {dados['preco']:.2f}\nBazin: {dados['p_bazin']:.2f}"
+                    )
+                    st.session_state.alertas_hoje.append(chave_alerta)
+                    st.toast(f"Alerta enviado para {tick}!", icon="🚀")
 
-    df = st.data_editor(st.session_state.carteira, num_rows="dynamic")
-    st.session_state.carteira = df
-
-    if st.button("Analisar Carteira"):
-        res = []
-        for _, row in df.iterrows():
-            r, _ = obter_dados(row["Ticker"])
-            if r:
-                hoje = datetime.date.today()
-                if r["decisao_ia"].startswith("🟢") and st.session_state.alertas_diarios.get(row["Ticker"]) != hoje:
-                    enviar_telegram(TG_TOKEN, TG_CHAT, f"{row['Ticker']} → {r['decisao_ia']}")
-                    enviar_email(EMAIL_USER, EMAIL_PASS, f"{row['Ticker']} → {r['decisao_ia']}")
-                    st.session_state.alertas_diarios[row["Ticker"]] = hoje
-
-                res.append({
-                    "Ticker": row["Ticker"],
-                    "Score": r["score_ia"],
-                    "Decisão": r["decisao_ia"]
+                resultados.append({
+                    "Ticker": tick,
+                    "Preço": dados['preco'],
+                    "Score IA": dados['score_ia'],
+                    "Decisão": dados['decisao_ia'],
+                    "Bazin": dados['p_bazin']
                 })
-        st.dataframe(pd.DataFrame(res))
+            bar.progress((i+1)/len(lista))
+            
+        df_rank = pd.DataFrame(resultados).sort_values("Score IA", ascending=False)
+        st.dataframe(df_rank.style.background_gradient(subset=["Score IA"], cmap="Greens"), use_container_width=True)
 
-# --- ABA 3
+# --- ABA 3: SCANNER FIIs ---
 with tabs[2]:
-    if st.button("Gerar Ranking"):
-        ranking = []
-        for _, row in st.session_state.carteira.iterrows():
-            r, _ = obter_dados(row["Ticker"])
-            if r:
-                ranking.append({
-                    "Ticker": row["Ticker"],
-                    "Score": r["score_ia"],
-                    "Decisão": r["decisao_ia"]
-                })
-        st.dataframe(pd.DataFrame(ranking).sort_values("Score", ascending=False))
-
-# --- ABA 4
-with tabs[3]:
-    pat = st.number_input("Patrimônio Atual", 100000.0)
-    aporte = st.number_input("Aporte Mensal", 2000.0)
-    if st.button("Simular"):
-        sims = motor.monte_carlo(pat, aporte)
-        fig = go.Figure(go.Histogram(x=sims))
-        st.plotly_chart(fig, use_container_width=True)
+    st.subheader("🏢 Scanner FII (CSV)")
+    up = st.file_uploader("Upload 'statusinvest-busca-avancada.csv'", type=["csv"])
+    if up:
+        df_fii = scanner_fiis_csv(up)
+        if not df_fii.empty:
+            st.success("Scanner Finalizado!")
+            st.dataframe(
+                df_fii[["TICKER", "PRECO", "DY", "P/VP", "Score", "SEGMENTO"]].head(20)
+                .style.background_gradient(subset=["Score"], cmap="Blues"), 
+                use_container_width=True
+            )
