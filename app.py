@@ -4,6 +4,7 @@ from motor import MotorAnalise
 import pandas as pd
 import plotly.graph_objects as go
 
+# Configuração inicial
 st.set_page_config(page_title="Terminal Ricardo - Hedge Fund", layout="wide")
 
 # --- LÓGICA DE VEREDITO SEGURO 360º (FIIs) ---
@@ -46,22 +47,23 @@ ticker_final = formatar_ticker(ticker_raw)
 
 tab1, tab2, tab3 = st.tabs(["📊 Inteligência de Mercado", "🏙️ Scanner FIIs - SEGURANÇA", "🛡️ Gestão PGBL"])
 
-# --- ABA 1: AÇÕES (Com Filtros de Dívida e Eficiência) ---
+# --- ABA 1: AÇÕES (Segurança Máxima) ---
 with tab1:
     data, info = carregar_dados_completos(ticker_final)
     if not data.empty:
         res = MotorAnalise().analisar(data, info, ticker_final)
         if res:
-            # Filtro Adicional de Segurança para Ações
-            divida_ok = info.get('debtToEbitda', 0) < 3 if info.get('debtToEbitda') else True
-            roe_ok = info.get('returnOnEquity', 0) > 0.10 if info.get('returnOnEquity') else True
+            # Filtros de Segurança: Dívida < 3x e ROE > 10%
+            divida = info.get('debtToEbitda')
+            divida_ok = (divida < 3) if divida is not None else True
+            roe = info.get('returnOnEquity')
+            roe_ok = (roe > 0.10) if roe is not None else True
             
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Preço Atual", f"R$ {res['preco']:.2f}")
             c2.metric("Preço Teto", f"R$ {res['preco_teto']:.2f}", f"{res['upside']:.1f}%")
             c3.metric("RSI (14d)", f"{res['rsi']:.1f}")
             
-            # Veredito com trava de segurança
             veredito_final = res['recomendacao']
             if not divida_ok: veredito_final = "⚠️ ALERTA (Dívida Alta)"
             
@@ -78,11 +80,15 @@ with tab1:
             with col_val:
                 st.subheader("🏛️ Valuation & Saúde")
                 st.write(f"**Graham:** R$ {res['p_graham']:.2f} | **Bazin:** R$ {res['p_bazin']:.2f}")
-                st.write(f"**Dívida/EBITDA:** {info.get('debtToEbitda', 'N/A')} (Ideal < 3)")
-                st.write(f"**ROE:** {info.get('returnOnEquity', 0)*100:.1f}% (Ideal > 10%)")
+                st.write(f"**Dívida/EBITDA:** {divida if divida else 'N/A'}")
+                st.write(f"**ROE:** {roe*100 if roe else 0:.1f}%")
 
 # --- ABA 2: SCANNER FIIS (Segurança Máxima) ---
 with tab2:
     st.header("🏙️ Scanner FII - Stress Test")
     try:
-        df_fii = pd.read_csv("statusinvest-busca-avancada.csv", sep=";", encoding
+        # Tenta ler o CSV com suporte a acentos (comum no Excel brasileiro)
+        try:
+            df_fii = pd.read_csv("statusinvest-busca-avancada.csv", sep=";", encoding="utf-8")
+        except:
+            df_fii = pd.read_csv("statusinvest-busca-avancada.csv", sep="
