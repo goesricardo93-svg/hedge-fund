@@ -10,7 +10,7 @@ from email.mime.text import MIMEText
 # ======================================================
 # 1. CONFIGURAÇÕES & SEGREDOS
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 21.0", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 22.0", layout="wide")
 
 try:
     TELEGRAM_TOKEN = st.secrets["telegram"]["token"]
@@ -54,7 +54,7 @@ class MotorAnalise:
             stop_loss = suporte * 0.97
             stop_gain = resistencia * 1.02
 
-            # FUNDAMENTOS (COM TRAVA DE SEGURANÇA PARA DY)
+            # FUNDAMENTOS (DY Corrigido)
             dy = info.get("dividendYield", 0) or 0
             if dy == 0:
                 div_rate = info.get("trailingAnnualDividendRate", 0) or info.get("dividendRate", 0)
@@ -146,7 +146,7 @@ def disparar_alerta(titulo, corpo):
     except: pass
 
 @st.cache_data(ttl=3600)
-def obter_dados_seguros_v9(ticker):
+def obter_dados_seguros_v10(ticker): # v10 para limpar cache
     try:
         t_obj = yf.Ticker(ticker)
         hist = t_obj.history(period="2y")
@@ -228,7 +228,7 @@ def scanner_fiis_csv(uploaded_file):
         return pd.DataFrame()
 
 # ======================================================
-# 4. SESSION STATE
+# 4. SESSION STATE (SUA CARTEIRA DE 31 ATIVOS)
 # ======================================================
 if "carteira_acoes" not in st.session_state:
     dados = [
@@ -257,7 +257,7 @@ ticker_raw = st.sidebar.text_input("🔍 Analisar Ticker:", "BBAS3").upper()
 ticker_input = formatar_ticker(ticker_raw)
 
 if st.sidebar.button("🔄 Restaurar Carteira Padrão"):
-    st.session_state.carteira_acoes = pd.DataFrame([
+    dados = [
         ["ALZR11.SA", 100, 10.81], ["BBAS3.SA", 1703, 24.48], ["BBSE3.SA", 55, 35.64],
         ["BTCI11.SA", 502, 10.16], ["BTLG11.SA", 60, 98.50], ["CCME11.SA", 152, 8.55],
         ["CMIG4.SA", 1644, 11.12], ["CPLE3.SA", 617, 9.64], ["CPSH11.SA", 169, 10.10],
@@ -269,7 +269,8 @@ if st.sidebar.button("🔄 Restaurar Carteira Padrão"):
         ["TAEE4.SA", 1000, 11.36], ["VALE3.SA", 152, 54.79], ["VGIR11.SA", 296, 9.58],
         ["VISC11.SA", 16, 109.70], ["XPCA11.SA", 110, 8.77], ["XPLG11.SA", 26, 102.31],
         ["XPML11.SA", 10, 106.05]
-    ], columns=["Ticker", "Qtd", "PM"])
+    ]
+    st.session_state.carteira_acoes = pd.DataFrame(dados, columns=["Ticker", "Qtd", "PM"])
     st.rerun()
 
 tabs = st.tabs(["🔎 Análise Técnica", "💼 Carteira Geral", "🏢 Scanner FIIs 360", "💰 Futuro"])
@@ -277,7 +278,7 @@ tabs = st.tabs(["🔎 Análise Técnica", "💼 Carteira Geral", "🏢 Scanner F
 # --- ABA 1: ANÁLISE ---
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
-    r = obter_dados_seguros_v9(ticker_input)
+    r = obter_dados_seguros_v10(ticker_input)
     
     if r:
         col_ia1, col_ia2 = st.columns([1, 3])
@@ -317,7 +318,7 @@ with tabs[0]:
                 close = hist_chart["Close"]
                 if isinstance(close, pd.DataFrame): close = close.iloc[:,0]
                 
-                # Média Móvel
+                # Média Móvel 50
                 mm50 = close.rolling(window=50).mean()
 
                 fig = go.Figure()
@@ -335,7 +336,7 @@ with tabs[0]:
                 st.plotly_chart(fig, use_container_width=True)
         except Exception as e: st.error(f"Erro gráfico: {e}")
 
-    else: st.warning("Ticker não encontrado.")
+    else: st.warning(f"Ticker '{ticker_input}' não encontrado.")
 
 # --- ABA 2: CARTEIRA ---
 with tabs[1]:
@@ -348,7 +349,7 @@ with tabs[1]:
         bar = st.progress(0)
         total = len(df_ed)
         for i, row in df_ed.iterrows():
-            r = obter_dados_seguros_v9(row["Ticker"])
+            r = obter_dados_seguros_v10(row["Ticker"])
             if r:
                 rec = r['decisao_ia']
                 if r['preco'] < row['PM'] * 0.95 and "COMPRA" in rec: rec = "🔥 COMPRA FORTE (Abaixo PM)"
@@ -367,12 +368,10 @@ with tabs[1]:
         
         if res:
             df_res = pd.DataFrame(res).sort_values("Score", ascending=False)
-            # CORREÇÃO DA LINHA 378 (QUEBRA DE LINHA)
-            st.dataframe(
-                df_res.style.background_gradient(subset=["Score"], cmap="Greens")
-                .map(lambda x: "color: red" if x < 0 else "color: green", subset=["Lucro"]),
-                use_container_width=True
-            )
+            # CORREÇÃO DEFINITIVA DA EXIBIÇÃO:
+            styled_df = df_res.style.background_gradient(subset=["Score"], cmap="Greens")
+            styled_df = styled_df.map(lambda x: "color: red" if x < 0 else "color: green", subset=["Lucro"])
+            st.dataframe(styled_df, use_container_width=True)
 
 # --- ABA 3: FIIs 360 ---
 with tabs[2]:
