@@ -17,6 +17,7 @@ class MotorAnalise:
             if isinstance(fechamento, pd.DataFrame): fechamento = fechamento.iloc[:, 0]
             if isinstance(volume, pd.DataFrame): volume = volume.iloc[:, 0]
             
+            # Garante dados mínimos
             if len(fechamento) < 30: return None
             
             preco_atual = float(fechamento.iloc[-1])
@@ -40,9 +41,12 @@ class MotorAnalise:
             vol_media = volume.rolling(20).mean().iloc[-1]
             vol_relativo = (volume.iloc[-1] / vol_media) if vol_media > 0 else 0
 
-            # Volatilidade (Restaurada)
+            # Volatilidade (Cálculo Restaurado)
             retornos = fechamento.pct_change().dropna()
-            volatilidade = retornos.std() * (252 ** 0.5)
+            if len(retornos) > 0:
+                volatilidade = retornos.std() * (252 ** 0.5)
+            else:
+                volatilidade = 0.0
 
             # Sinal Técnico
             sinal_tecnico = "NEUTRO"
@@ -75,7 +79,7 @@ class MotorAnalise:
             margem_liq = safe_get("profitMargins")
             divida_ebitda = safe_get("debtToEbitda")
             
-            # Novos Indicadores
+            # Novos Indicadores (Blindados para Bancos)
             liq_corrente = safe_get("currentRatio", 0) 
             cresc_receita = safe_get("revenueGrowth", 0)
 
@@ -83,7 +87,8 @@ class MotorAnalise:
             val_div = div_rate
             p_bazin = val_div / 0.06 if val_div > 0 else 0
             p_graham = np.sqrt(22.5 * lpa * vpa) if (lpa > 0 and vpa > 0) else 0
-            p_gordon = p_bazin # Gordon simplificado (igual a Bazin para crescimento zero)
+            # Gordon Simplificado (Assume Bazin quando não há dados complexos de crescimento g)
+            p_gordon = p_bazin 
 
             # --- 4. SCORE IA ---
             score = 50
@@ -129,6 +134,7 @@ class MotorAnalise:
             elif score <= 40: decisao = "🔴 VENDA/RISCO"
             else: decisao = "⚪ MANTER"
 
+            # Resumo
             txt_resumo = ", ".join(motivos[:3])
             if alertas: txt_resumo += f" | ⚠️ {', '.join(alertas[:2])}"
 
@@ -136,9 +142,10 @@ class MotorAnalise:
             suporte = float(fechamento.tail(window).min())
             resistencia = float(fechamento.tail(window).max())
 
+            # --- RETORNO FINAL (AQUI ESTAVA O ERRO - p_gordon ADICIONADO) ---
             return {
                 "preco": preco_atual, "rsi": rsi, "volatilidade": volatilidade, 
-                "p_bazin": p_bazin, "p_graham": p_graham, "p_gordon": p_gordon, # <--- AQUI ESTAVA O ERRO (Corrigido)
+                "p_bazin": p_bazin, "p_graham": p_graham, "p_gordon": p_gordon, # <--- CHAVE RESTAURADA
                 "dy": dy,
                 "suporte": suporte, "resistencia": resistencia, 
                 "stop_loss": suporte * 0.97, "stop_gain": resistencia * 1.02,
@@ -154,7 +161,7 @@ class MotorAnalise:
             print(f"❌ Erro MotorAnalise ({ticker}): {e}")
             return None
 
-    # MANTENHA AS FUNÇÕES ABAIXO (Monte Carlo e Dividendos) IGUAIS
+    # MANTENHA AS FUNÇÕES ABAIXO IGUAIS (MONTE CARLO E DIVIDENDOS)
     def monte_carlo_carteira(self, retornos_carteira, valor_inicial, aporte_mensal, anos=10, sims=1000):
         if len(retornos_carteira) == 0: return np.array([])
         log_returns = np.log(1 + retornos_carteira)
