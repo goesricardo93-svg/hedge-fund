@@ -3,13 +3,15 @@ import streamlit as st
 # ======================================================
 # 1. CONFIGURAÇÃO (PRIMEIRA LINHA ABSOLUTA)
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo v81", layout="wide", page_icon="💰")
+st.set_page_config(page_title="Hedge Fund Ricardo v83", layout="wide", page_icon="💰")
 
 # ======================================================
 # 2. IMPORTAÇÃO BLINDADA
 # ======================================================
 import pandas as pd
 import yfinance as yf
+import streamlit.components.v1 as components # <--- A LINHA QUE FALTAVA
+
 try:
     from motor import MotorAnalise
     from rebalance import rebalancear_e_aportar
@@ -82,7 +84,7 @@ if "carteira_rf" not in st.session_state:
 # ======================================================
 # 5. INTERFACE
 # ======================================================
-st.title("💰 Hedge Fund Ricardo v81")
+st.title("💰 Hedge Fund Ricardo v83")
 
 with st.sidebar:
     st.header("🎮 Painel")
@@ -149,6 +151,7 @@ with tabs[0]:
                 {"Ind": "Resistência", "Val": f"R$ {r.get('resistencia',0):.2f}"}
             ]), use_container_width=True)
             
+            # GRÁFICO (Aqui estava o erro antes, agora corrigido com o import lá em cima)
             components.html(f"""<script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"width":"100%","height":500,"symbol":"BMFBOVESPA:{t.replace('.SA','')}","interval":"D","theme":"light"}});</script>""", height=500)
         else: st.error("Ativo não encontrado. Tente limpar o cache.")
 
