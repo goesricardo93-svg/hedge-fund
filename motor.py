@@ -12,99 +12,157 @@ class MotorAnalise:
             if isinstance(hist, pd.DataFrame):
                 if "Close" in hist.columns: fechamento = hist["Close"]
                 else: fechamento = hist.iloc[:, 0]
-            else: fechamento = hist
+                
+                if "Volume" in hist.columns: volume = hist["Volume"]
+                else: volume = pd.Series([0]*len(fechamento))
+            else: return None
 
             if isinstance(fechamento, pd.DataFrame): fechamento = fechamento.iloc[:, 0]
+            if isinstance(volume, pd.DataFrame): volume = volume.iloc[:, 0]
             
             preco_atual = float(fechamento.iloc[-1])
             
-            # --- TÉCNICA ---
-            delta = fechamento.diff()
-            gain = delta.clip(lower=0).rolling(14).mean()
-            loss = -delta.clip(upper=0).rolling(14).mean()
-            
-            if loss.iloc[-1] == 0: rs = 100 
-            else: rs = gain / loss
-            
-            rsi = 100 - (100 / (1 + rs.iloc[-1])) if not pd.isna(rs.iloc[-1]) else 50
-            
-            retornos = fechamento.pct_change().dropna()
-            volatilidade = retornos.std() * (252 ** 0.5)
-            topo = fechamento.cummax()
-            drawdown = ((fechamento - topo) / topo).min() * 100
+            # --- TÉCNICA AVANÇADA (MACD + MÉDIAS) ---
+            # Médias
+            mme9 = fechamento.ewm(span=9, adjust=False).mean()
+            mme21 = fechamento.ewm(span=21, adjust=False).mean()
+            curta, longa = mme9.iloc[-1], mme21.iloc[-1]
+            curta_ant, longa_ant = mme9.iloc[-2], mme21.iloc[-2]
 
-            window = 60 
-            suporte = float(fechamento.tail(window).min())
-            resistencia = float(fechamento.tail(window).max())
-            stop_loss = suporte * 0.97
-            stop_gain = resistencia * 1.02 
-
-            # --- FUNDAMENTOS ---
-            div_rate = info.get("trailingAnnualDividendRate", 0)
-            if div_rate is None: div_rate = 0
+            # MACD (Novo Indicador de Tendência)
+            # MACD Line: MME12 - MME26
+            ema12 = fechamento.ewm(span=12, adjust=False).mean()
+            ema26 = fechamento.ewm(span=26, adjust=False).mean()
+            macd_line = ema12 - ema26
+            # Signal Line: MME9 da MACD Line
+            signal_line = macd_line.ewm(span=9, adjust=False).mean()
+            histograma = macd_line - signal_line
             
-            div_yield_api = info.get("dividendYield", 0)
-            if div_yield_api is None: div_yield_api = 0
+            macd_val = macd_line.iloc[-1]
+            signal_val = signal_line.iloc[-1]
+            hist_val = histograma.iloc[-1]
 
-            if div_rate > 0: dy = div_rate / preco_atual
-            else:
-                dy = div_yield_api
-                if dy > 2.0: dy = dy / 100
+            # Volume Relativo
+            vol_media = volume.rolling(20).mean().iloc[-1]
+            vol_relativo = (volume.iloc[-1] / vol_media) if vol_media > 0 else 0
+
+            # --- SINAL TÉCNICO ---
+            sinal_tecnico = "NEUTRO"
+            preco_alvo = 0.0
             
+            # Setup Cruzamento
+            if curta > longa and curta_ant <= longa_ant:
+                sinal_tecnico = "⚡ COMPRA (CRUZAMENTO)"
+                preco_alvo = preco_atual
+            elif curta > longa:
+                sinal_tecnico = "📈 TENDÊNCIA ALTA"
+                preco_alvo = curta # Pullback
+            elif curta < longa and curta_ant >= longa_ant:
+                sinal_tecnico = "☠️ VENDA (CRUZAMENTO)"
+            elif curta < longa:
+                sinal_tecnico = "📉 TENDÊNCIA BAIXA"
+
+            # Confirmação MACD
+            status_macd = "Bullish" if macd_val > signal_val else "Bearish"
+
+            # --- FUNDAMENTOS & SEGURANÇA (NOVOS) ---
+            div_rate = info.get("trailingAnnualDividendRate", 0) or 0
+            if div_rate == 0: div_rate = (info.get("dividendYield", 0) or 0) * preco_atual
+            dy = div_rate / preco_atual if preco_atual > 0 else 0
+
+            # Métricas Básicas
             lpa = info.get("trailingEps", 0) or 0
             vpa = info.get("bookValue", 0) or 0
             roe = info.get("returnOnEquity", 0) or 0
             margem_liq = info.get("profitMargins", 0) or 0
             divida_ebitda = info.get("debtToEbitda", 0)
 
-            # --- VALUATION ---
-            val_div = div_rate if div_rate > 0 else (preco_atual * dy)
+            # Métricas de Segurança (NOVAS)
+            # Liquidez Corrente: Capacidade de pagar dívidas curto prazo
+            liq_corrente = info.get("currentRatio", 0) 
+            # Crescimento de Receita (YoY): A empresa está viva?
+            cresc_receita = info.get("revenueGrowth", 0)
+
+            # Valuation
+            val_div = div_rate
             p_bazin = val_div / 0.06 if val_div > 0 else 0
             p_graham = np.sqrt(22.5 * lpa * vpa) if (lpa > 0 and vpa > 0) else 0
             p_gordon = p_bazin
 
-            # --- SCORE IA ---
+            # --- SCORE IA 2.0 (MAIS RIGOROSO) ---
             score = 50
             motivos = []
             alertas = []
 
-            if p_bazin > 0 and preco_atual < p_bazin: score += 15; motivos.append("Desconto Bazin")
-            if p_graham > 0 and preco_atual < p_graham: score += 15; motivos.append("Desconto Graham")
-            
+            # 1. Técnica (Peso 30)
+            if "COMPRA" in sinal_tecnico: 
+                score += 15; motivos.append("Cruzamento Médias")
+                if status_macd == "Bullish": score += 5; motivos.append("MACD Positivo")
+                if vol_relativo > 1.2: score += 5; motivos.append("Volume Forte")
+            elif "VENDA" in sinal_tecnico: 
+                score -= 15; alertas.append("Tendência Baixa")
+
+            # 2. Valuation (Peso 20)
+            if p_bazin > 0 and preco_atual < p_bazin: score += 10; motivos.append("Desconto Bazin")
+            if p_graham > 0 and preco_atual < p_graham: score += 10; motivos.append("Desconto Graham")
+
+            # 3. Qualidade & Crescimento (Peso 30)
             if roe > 0.15: score += 10; motivos.append(f"ROE Alto ({roe*100:.0f}%)")
-            elif roe < 0.05: score -= 10; alertas.append("Rentabilidade Baixa")
+            
+            # NOVO: Bonifica Crescimento / Pune Estagnação
+            if cresc_receita and cresc_receita > 0.10: score += 10; motivos.append("Crescimento > 10%")
+            elif cresc_receita and cresc_receita < 0: score -= 10; alertas.append("Receita Caindo")
 
-            if divida_ebitda is not None and divida_ebitda > 3.5:
-                score -= 15; alertas.append("Alavancado")
+            # 4. Segurança & Solvência (Peso 20)
+            # NOVO: Liquidez Corrente
+            if liq_corrente and liq_corrente > 1.5: score += 5; motivos.append("Caixa Sólido")
+            elif liq_corrente and liq_corrente < 1.0: score -= 15; alertas.append("Risco Liquidez (Curto Prazo)")
 
-            if dy > 0.06: score += 10; motivos.append(f"DY Atrativo ({dy*100:.1f}%)")
+            # Dívida Longa
+            if divida_ebitda and divida_ebitda > 3.5: score -= 15; alertas.append("Alavancado")
 
-            if rsi < 30: score += 15; motivos.append("Sobrevendido")
-            elif rsi > 70: score -= 15; alertas.append("Esticado")
-            if preco_atual <= suporte * 1.03: score += 10; motivos.append("Em Suporte")
+            # 5. Dividendos
+            if dy > 0.06: score += 5; motivos.append("Dividendos")
+
+            # RSI
+            rsi = 100 - (100 / (1 + (gain.iloc[-1]/loss.iloc[-1] if loss.iloc[-1]!=0 else 1)))
+            if rsi < 30: score += 10; motivos.append("RSI Sobrevendido")
+            elif rsi > 70: score -= 10; alertas.append("RSI Esticado")
 
             score = min(100, max(0, score))
 
-            if score >= 75: decisao = "🟢🟢 COMPRA FORTE"
+            if score >= 80: decisao = "🟢🟢 COMPRA FORTE"
             elif score >= 60: decisao = "🟢 COMPRA"
-            elif score <= 35: decisao = "🔴 VENDA"
+            elif score <= 40: decisao = "🔴 VENDA/RISCO"
             else: decisao = "⚪ MANTER"
 
-            txt_motivos = ", ".join(motivos[:3])
-            if not txt_motivos: txt_motivos = "Neutro"
-            if alertas: txt_motivos += f" | ⚠️ {', '.join(alertas[:2])}"
+            txt_resumo = ", ".join(motivos[:3])
+            if alertas: txt_resumo += f" | ⚠️ {', '.join(alertas[:2])}"
+
+            # Indicadores de Suporte
+            window = 60
+            suporte = float(fechamento.tail(window).min())
+            resistencia = float(fechamento.tail(window).max())
 
             return {
-                "preco": preco_atual, "rsi": rsi, "volatilidade": volatilidade, "drawdown": drawdown,
-                "p_bazin": p_bazin, "p_graham": p_graham, "p_gordon": p_gordon, "dy": dy,
-                "suporte": suporte, "resistencia": resistencia, "stop_loss": stop_loss, "stop_gain": stop_gain,
-                "score_ia": score, "decisao_ia": decisao, "motivos": txt_motivos,
+                "preco": preco_atual, "rsi": rsi, "volatilidade": volatilidade, 
+                "p_bazin": p_bazin, "p_graham": p_graham, "dy": dy,
+                "suporte": suporte, "resistencia": resistencia, 
+                "stop_loss": suporte * 0.97, "stop_gain": resistencia * 1.02,
+                "score_ia": score, "decisao_ia": decisao, "motivos": txt_resumo,
                 "pl": info.get("trailingPE", 0) or 0, "pvp": info.get("priceToBook", 0) or 0,
-                "roe": roe, "margem": margem_liq, "divida_ebitda": divida_ebitda if divida_ebitda else 0
+                "roe": roe, "margem": margem_liq, "divida_ebitda": divida_ebitda,
+                # NOVOS DADOS
+                "sinal_tecnico": sinal_tecnico, "preco_alvo_entrada": preco_alvo,
+                "vol_relativo": vol_relativo, "mme9": curta, "mme21": longa,
+                "macd": macd_val, "macd_signal": signal_val,
+                "liq_corrente": liq_corrente, "cresc_receita": cresc_receita
             }
-        except Exception: return None
+        except Exception as e: 
+            print(f"Erro Motor: {e}")
+            return None
 
-    # MONTE CARLO GBM
+    # MÉTODOS DE MONTE CARLO E DIVIDENDOS (MANTIDOS IGUAIS - NÃO COPIEI PARA ECONOMIZAR ESPAÇO, MANTENHA-OS)
     def monte_carlo_carteira(self, retornos_carteira, valor_inicial, aporte_mensal, anos=10, sims=1000):
         if len(retornos_carteira) == 0: return np.array([])
         log_returns = np.log(1 + retornos_carteira)
@@ -121,50 +179,29 @@ class MotorAnalise:
             res.append(bal)
         return np.array(res)
 
-    # --- LÓGICA DE DIVIDENDOS (PASSADO + FUTURO) ---
     def consultar_dividendos(self, ticker):
         try:
             t = yf.Ticker(ticker)
             hoje = pd.Timestamp.now().normalize()
-            
-            resultado = {
-                "ultimo_data": "-",
-                "ultimo_valor": "-",
-                "proximo_data": "-",
-                "proximo_valor": "-",
-                "status": "NEUTRO"
-            }
-
-            # 1. BUSCA O PASSADO (Último Pago)
+            resultado = {"ultimo_data": "-", "ultimo_valor": "-", "proximo_data": "-", "proximo_valor": "-", "status": "NEUTRO"}
             try:
                 divs = t.dividends
                 if not divs.empty:
-                    data_ult = divs.index[-1]
-                    val_ult = float(divs.iloc[-1])
-                    resultado["ultimo_data"] = data_ult.strftime('%d/%m/%Y')
-                    resultado["ultimo_valor"] = f"R$ {val_ult:.2f}"
+                    resultado["ultimo_data"] = divs.index[-1].strftime('%d/%m/%Y')
+                    resultado["ultimo_valor"] = f"R$ {float(divs.iloc[-1]):.2f}"
             except: pass
-
-            # 2. BUSCA O FUTURO (Calendário)
             try:
                 cal = t.calendar
-                data_futura = None
-                
-                # Tratamento para formatos do Yahoo
+                data_fut = None
                 if isinstance(cal, dict):
-                    raw_date = cal.get('Dividend Date') or cal.get('Ex-Dividend Date')
-                    if raw_date: data_futura = pd.to_datetime(raw_date)
+                    dt = cal.get('Dividend Date') or cal.get('Ex-Dividend Date')
+                    if dt: data_fut = pd.to_datetime(dt)
                 elif isinstance(cal, pd.DataFrame) and not cal.empty:
-                    data_futura = pd.to_datetime(cal.iloc[0, 0])
-
-                # Se existe data futura E ela é maior que hoje
-                if data_futura and data_futura > hoje:
-                    resultado["proximo_data"] = data_futura.strftime('%d/%m/%Y')
-                    resultado["proximo_valor"] = "Aguardando Anúncio" # Yahoo não costuma dar o valor futuro exato
+                    data_fut = pd.to_datetime(cal.iloc[0, 0])
+                if data_fut and data_fut > hoje:
+                    resultado["proximo_data"] = data_fut.strftime('%d/%m/%Y')
+                    resultado["proximo_valor"] = "Aguardando"
                     resultado["status"] = "AGENDA"
             except: pass
-
             return resultado
-
-        except:
-            return {"ultimo_data": "-", "ultimo_valor": "-", "proximo_data": "-", "proximo_valor": "-", "status": "ERRO"}
+        except: return {"status": "ERRO", "ultimo_data":"-", "ultimo_valor":"-", "proximo_data":"-", "proximo_valor":"-"}

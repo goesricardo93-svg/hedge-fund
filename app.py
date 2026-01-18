@@ -16,18 +16,18 @@ try:
     from rebalance import rebalancear_e_aportar
     from tax import calcular_darf
     from relatorio import RelatorioPrivate
-    from options import BlackScholes # Módulo Novo
+    from options import BlackScholes
 except ImportError as e:
-    st.error(f"Erro Crítico de Arquitetura: Faltam arquivos modulares. Detalhes: {e}")
+    st.error(f"Erro Crítico: {e}")
     st.stop()
 
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 47.0", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 49.0 (Safety First)", layout="wide")
 
 # ======================================================
-# 2. CACHE E FUNÇÕES UTILITÁRIAS
+# 2. CACHE E FUNÇÕES
 # ======================================================
 @st.cache_data(ttl=3600)
-def obter_dados_v47(ticker): 
+def obter_dados_v49(ticker): # v49
     try:
         t = yf.Ticker(ticker)
         hist = t.history(period="2y")
@@ -50,7 +50,6 @@ def formatar_ticker(ticker):
     return t
 
 def renderizar_tradingview_widget(ticker):
-    """Renderiza o Gráfico Profissional do TradingView"""
     tv_symbol = ticker
     if ".SA" in ticker:
         clean = ticker.replace(".SA", "")
@@ -119,14 +118,11 @@ if (hoje.day == 1 or forcar_envio) and f"report_{mes_str}" not in st.session_sta
         try:
             res_auto = []
             for _, row in st.session_state.carteira_acoes.iterrows():
-                r = obter_dados_v47(row["Ticker"])
+                r = obter_dados_v49(row["Ticker"])
                 if r:
                     res_auto.append({
-                        "Ticker": row["Ticker"],
-                        "Preço": r["preco"],
-                        "PM": row["PM"],
-                        "Valor_Atual": row["Qtd"] * r["preco"],
-                        "Lucro": (r["preco"] - row["PM"]) * row["Qtd"],
+                        "Ticker": row["Ticker"], "Preço": r["preco"], "PM": row["PM"],
+                        "Valor_Atual": row["Qtd"] * r["preco"], "Lucro": (r["preco"] - row["PM"]) * row["Qtd"],
                         "Score": r['score_ia']
                     })
             if res_auto:
@@ -152,17 +148,15 @@ if st.sidebar.button("🔄 Restaurar Padrões"):
     st.session_state.clear()
     st.rerun()
 
-# ADICIONADA ABA DE OPÇÕES NA LISTA
 tabs = st.tabs(["🔎 Análise", "💼 Carteira", "🏢 FIIs 360", "🛡️ RF & PGBL", "💰 Futuro", "🦁 Fiscal", "⚡ Opções"])
 
 # --- ABA 1: ANÁLISE ---
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
     motor = MotorAnalise()
-    r = obter_dados_v47(ticker_input)
+    r = obter_dados_v49(ticker_input)
     
     if r:
-        # Box Proventos
         div_info = motor.consultar_dividendos(ticker_input)
         cor_box = "green" if div_info['status'] == "AGENDA" else "blue"
         st.markdown(f"""
@@ -175,22 +169,20 @@ with tabs[0]:
         </div>""", unsafe_allow_html=True)
 
         col_ia1, col_ia2 = st.columns([1, 3])
-        col_ia1.metric("Score IA", f"{r['score_ia']}/100")
+        col_ia1.metric("Score IA (Rigoroso)", f"{r['score_ia']}/100")
         if "COMPRA" in r['decisao_ia']: col_ia2.success(f"### {r['decisao_ia']}")
         elif "VENDA" in r['decisao_ia']: col_ia2.error(f"### {r['decisao_ia']}")
         else: col_ia2.warning(f"### {r['decisao_ia']}")
         
-        st.write(f"**Análise Cruzada:** {r['motivos']}")
+        st.write(f"**Veredito Cruzado:** {r['motivos']}")
         st.divider()
 
-        # Métricas Rápidas
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("Preço Atual", f"R$ {r['preco']:.2f}")
         k2.metric("Teto (Alvo IA)", f"R$ {r['stop_gain']:.2f}")
         k3.metric("RSI (14)", f"{r['rsi']:.0f}")
         k4.metric("Volatilidade", f"{r['volatilidade']*100:.1f}%")
 
-        # Tabelas Valuation e Qualidade
         col_val, col_fund = st.columns(2)
         with col_val:
             st.subheader("📋 Valuation")
@@ -198,28 +190,43 @@ with tabs[0]:
                 "Modelo": ["Bazin (Div)", "Graham (Patr)", "Gordon (Cresc)"],
                 "Preço Justo": [f"R$ {r['p_bazin']:.2f}", f"R$ {r['p_graham']:.2f}", f"R$ {r['p_gordon']:.2f}"]
             }), use_container_width=True)
+        
         with col_fund:
-            st.subheader("📊 Qualidade")
+            st.subheader("📊 Segurança & Solvência (Novo)")
+            # Formatação para lidar com None
+            liq_fmt = f"{r['liq_corrente']:.2f}" if r.get('liq_corrente') else "-"
+            cresc_fmt = f"{r['cresc_receita']*100:.1f}%" if r.get('cresc_receita') else "-"
+            div_fmt = f"{r['divida_ebitda']:.2f}x" if r.get('divida_ebitda') else "-"
+            
             st.dataframe(pd.DataFrame({
-                "Indicador": ["DY", "P/L", "P/VP", "ROE", "Dívida/EBITDA"],
-                "Valor": [f"{r['dy']*100:.2f}%", f"{r['pl']:.2f}", f"{r['pvp']:.2f}", f"{r['roe']*100:.1f}%", f"{r['divida_ebitda']:.2f}x"]
+                "Indicador": ["Liquidez Corrente (>1.0)", "Cresc. Receita", "Dívida/EBITDA (<3.0)", "ROE"],
+                "Valor": [liq_fmt, cresc_fmt, div_fmt, f"{r['roe']*100:.1f}%"]
             }), use_container_width=True)
 
         st.divider()
         st.subheader("📈 Gráfico Profissional")
         renderizar_tradingview_widget(ticker_input)
         
-        # --- TABELA OPERACIONAL (ABAIXO DO GRÁFICO) ---
-        st.subheader("🎯 Setup Operacional (IA)")
+        st.subheader("🎯 Setup Operacional (Robô)")
+        sinal = r['sinal_tecnico']
+        cor_sinal = "🟢" if "COMPRA" in sinal else "🔴" if "VENDA" in sinal else "⚪"
+        vol_txt = f"{r['vol_relativo']:.1f}x Média" if r['vol_relativo'] > 0 else "-"
+        
+        # MACD Status
+        macd_delta = r['macd'] - r['macd_signal']
+        macd_status = "↗️ Subindo" if macd_delta > 0 else "↘️ Caindo"
+        
         df_setup = pd.DataFrame([
-            {"Indicador": "Preço Atual", "Valor": f"R$ {r['preco']:.2f}"},
-            {"Indicador": "Suporte Relevante (60d)", "Valor": f"R$ {r['suporte']:.2f}"},
-            {"Indicador": "Resistência (60d)", "Valor": f"R$ {r['resistencia']:.2f}"},
-            {"Indicador": "🛑 Stop Loss Sugerido", "Valor": f"R$ {r['stop_loss']:.2f}"},
-            {"Indicador": "🎯 Stop Gain (Alvo)", "Valor": f"R$ {r['stop_gain']:.2f}"}
+            {"Indicador": "🤖 SINAL DO ROBÔ", "Valor": f"{cor_sinal} {sinal}"},
+            {"Indicador": "Preço de Entrada (Sugerido)", "Valor": f"R$ {r['preco_alvo_entrada']:.2f}" if r['preco_alvo_entrada'] > 0 else "-"},
+            {"Indicador": "Volume Relativo", "Valor": vol_txt},
+            {"Indicador": "Tendência MACD", "Valor": macd_status},
+            {"Indicador": "Média Curta (9)", "Valor": f"R$ {r['mme9']:.2f}"},
+            {"Indicador": "Média Longa (21)", "Valor": f"R$ {r['mme21']:.2f}"},
+            {"Indicador": "🛑 Stop Loss (Segurança)", "Valor": f"R$ {r['stop_loss']:.2f}"}
         ])
         st.dataframe(df_setup, use_container_width=True, hide_index=True)
-        st.info("Nota: O Stop Loss é calculado 3% abaixo do suporte recente e o Alvo 2% acima da resistência recente.")
+        st.info("Estratégia: Cruzamento de Médias + Volume + MACD.")
 
     else: st.warning("Ativo não encontrado. Tente limpar o cache.")
 
@@ -228,7 +235,6 @@ with tabs[1]:
     st.subheader(f"💼 Gestão de Carteira ({len(st.session_state.carteira_acoes)} Ativos)")
     df_ed = st.data_editor(st.session_state.carteira_acoes, num_rows="dynamic", use_container_width=True)
     st.session_state.carteira_acoes = df_ed
-    
     col_inp, col_btn = st.columns([1, 2])
     aporte_user = col_inp.number_input("💰 Aporte Disponível (R$)", 1000.0)
     
@@ -237,10 +243,12 @@ with tabs[1]:
         bar = st.progress(0)
         total = len(df_ed)
         for i, row in df_ed.iterrows():
-            r = obter_dados_v47(row["Ticker"])
+            r = obter_dados_v49(row["Ticker"])
             if r:
                 rec = r['decisao_ia']
-                if r['preco'] < row['PM'] * 0.95 and r['score_ia'] > 60: rec = "🔥 COMPRA (Abaixo PM)"
+                if "COMPRA" in r['sinal_tecnico']: rec = f"🔥 {r['sinal_tecnico']}"
+                elif r['preco'] < row['PM'] * 0.95 and r['score_ia'] > 60: rec = "🛒 COMPRA (Abaixo PM)"
+                
                 if r['score_ia'] >= 80 and row["Ticker"] not in st.session_state.alertas_enviados:
                     disparar_alerta(f"OPORTUNIDADE: {row['Ticker']}", f"Score: {r['score_ia']}")
                     st.session_state.alertas_enviados.add(row["Ticker"])
@@ -256,7 +264,6 @@ with tabs[1]:
             st.session_state.df_analisado = df_res 
             df_final = rebalancear_e_aportar(df_res, aporte_user)
             st.session_state.df_final = df_final
-            
             st.success("✅ Rebalanceamento Calculado!")
             st.dataframe(df_final[["Ticker", "Score", "Valor_Atual", "Lucro", "Veredito IA", "Aporte Sugerido (R$)"]].style.format({"Valor_Atual": "R$ {:.2f}", "Lucro": "R$ {:.2f}", "Aporte Sugerido (R$)": "R$ {:.2f}"}).background_gradient(subset=["Aporte Sugerido (R$)"], cmap="Greens"), use_container_width=True)
 
@@ -340,19 +347,15 @@ with tabs[5]:
         c2.write(res["detalhes"])
         st.table(res["memoria"])
 
-# --- ABA 7: OPÇÕES (DERIVATIVOS) ---
+# --- ABA 7: OPÇÕES ---
 with tabs[6]:
     st.subheader("⚡ Simulador Black-Scholes & Gregas")
     col_op1, col_op2 = st.columns([1, 3])
-    
     with col_op1:
         st.markdown("#### ⚙️ Parâmetros")
         op_ticker = st.text_input("Ativo Objeto (Ex: PETR4)", "PETR4.SA").upper()
-        try:
-            op_price_auto = yf.Ticker(formatar_ticker(op_ticker)).history(period="1d")["Close"].iloc[-1]
-        except:
-            op_price_auto = 30.00
-            
+        try: op_price_auto = yf.Ticker(formatar_ticker(op_ticker)).history(period="1d")["Close"].iloc[-1]
+        except: op_price_auto = 30.00
         op_spot = st.number_input("Preço do Ativo (Spot)", value=float(op_price_auto), format="%.2f")
         op_strike = st.number_input("Strike (Exercício)", value=float(op_price_auto), format="%.2f")
         op_venc = st.date_input("Vencimento", datetime.date.today() + datetime.timedelta(days=30))
@@ -364,34 +367,22 @@ with tabs[6]:
         hoje_op = datetime.date.today()
         dias_uteis = np.busday_count(hoje_op, op_venc)
         anos = dias_uteis / 252
-        
-        if anos <= 0:
-            st.error("A data de vencimento deve ser futura.")
+        if anos <= 0: st.error("Data de vencimento inválida.")
         else:
             tipo_calc = "call" if "Call" in op_tipo else "put"
             bs = BlackScholes(op_spot, op_strike, anos, op_taxa, op_vol, tipo_calc)
-            
             preco_teorico = bs.calcular_preco()
             gregas = bs.calcular_gregas()
-            
-            st.markdown(f"### 💎 Preço Justo (Teórico): <span style='color:#4CAF50'>R$ {preco_teorico:.2f}</span>", unsafe_allow_html=True)
-            
+            st.markdown(f"### 💎 Preço Justo: <span style='color:#4CAF50'>R$ {preco_teorico:.2f}</span>", unsafe_allow_html=True)
             cg1, cg2, cg3, cg4 = st.columns(4)
-            cg1.metric("Delta (Direção)", f"{gregas['Delta']:.2f}", help="Mudança para cada R$ 1 no ativo")
-            cg2.metric("Gamma (Aceleração)", f"{gregas['Gamma']:.3f}", help="Mudança do Delta")
-            cg3.metric("Theta (Tempo)", f"{gregas['Theta']:.3f}", help="Perda de valor por dia")
-            cg4.metric("Vega (Volatilidade)", f"{gregas['Vega']:.2f}", help="Mudança para cada 1% de Vol")
-            
-            st.divider()
-            st.subheader("📊 Cenário de Payoff (No Vencimento)")
-            x, y = bs.gerar_payoff(range_pct=0.20)
-            
+            cg1.metric("Delta", f"{gregas['Delta']:.2f}")
+            cg2.metric("Gamma", f"{gregas['Gamma']:.3f}")
+            cg3.metric("Theta", f"{gregas['Theta']:.3f}")
+            cg4.metric("Vega", f"{gregas['Vega']:.2f}")
+            x, y = bs.gerar_payoff(0.20)
             fig_op = go.Figure()
             fig_op.add_hline(y=0, line_dash="dot", line_color="gray")
             fig_op.add_trace(go.Scatter(x=x, y=y, mode='lines', name='Resultado', line=dict(color='blue', width=3)))
-            fig_op.add_vline(x=op_spot, line_dash="dash", line_color="orange", annotation_text="Preço Atual")
-            fig_op.add_vline(x=op_strike, line_dash="dash", line_color="black", annotation_text="Strike")
-            
-            fig_op.update_layout(title="Simulação de Lucro/Prejuízo", xaxis_title="Preço da Ação no Vencimento", yaxis_title="Lucro/Prejuízo (R$)", template="plotly_white", height=400)
+            fig_op.add_vline(x=op_spot, line_dash="dash", line_color="orange")
+            fig_op.update_layout(title="Simulação Payoff", height=400)
             st.plotly_chart(fig_op, use_container_width=True)
-            st.info("Dica: O 'Preço Justo' é matemático. Compare com o valor da corretora para achar distorções.")
