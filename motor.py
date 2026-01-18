@@ -87,65 +87,102 @@ class MotorAnalise:
             vpa = safe_get("bookValue")
             div_reais = (dy_anual / 100) * preco_atual
             
-            # Cálculo dos Modelos Individuais
             p_bazin = div_reais / 0.06 if div_reais > 0 else 0
             p_graham = np.sqrt(22.5 * lpa * vpa) if (lpa > 0 and vpa > 0) else 0
-            p_gordon = p_bazin # Simplificação conservadora para Gordon
+            p_gordon = p_bazin 
 
-            # --- IDENTIFICAÇÃO DE SETOR PARA DECISÃO DE PREÇO JUSTO ---
             setor_ativo = self.identificar_setor(info, ticker)
             is_fii = "FII" in setor_ativo
 
-            # ROBÔ DE PREÇO JUSTO (Lógica Condicional Ricardo)
+            # ROBÔ DE PREÇO JUSTO E ALVO
             if is_fii:
-                # FIIs: Apenas Bazin importa (Renda)
-                # Graham é ignorado pois distorce FIIs de Papel/Tijolo
-                preco_justo = p_bazin
+                preco_justo = p_bazin # FII respeita Bazin
             else:
-                # Ações: Média inteligente entre Patrimônio (Graham) e Renda (Bazin)
                 validos = [x for x in [p_bazin, p_graham] if x > 0]
                 preco_justo = sum(validos) / len(validos) if validos else 0
 
-            # --- 4. SCORE & RISCO ---
+            # --- 4. DUAL SCORE (AQUI VOLTA A LÓGICA V50.1) ---
             score = 50
             motivos = []
             alertas = []
-
-            # Travas
-            vol_fin_medio = (fechamento * volume).tail(21).mean()
-            limite_liq = 500000 if is_fii else 1000000
-            if vol_fin_medio < limite_liq: score -= 20; alertas.append(f"Baixa Liquidez (R${vol_fin_medio/1000:.0f}k)")
             
-            payout = safe_get("payoutRatio")
-            limite_payout = 1.2 if is_fii else 1.0 
-            if payout > limite_payout: score -= 15; alertas.append(f"Payout Alto ({payout*100:.0f}%)")
-
+            # Dados fundamentais comuns
             pvp = safe_get("priceToBook")
-            if is_fii and pvp > 0:
-                if pvp > 1.05: score -= 10; alertas.append(f"FII Caro (P/VP {pvp:.2f})")
-                if "Papel" in setor_ativo and pvp > 1.02: score = 0; alertas.append("⛔ ÁGIO EM PAPEL")
+            payout = safe_get("payoutRatio")
+            vol_fin_medio = (fechamento * volume).tail(21).mean()
 
-            # Pontuação Técnica
-            tendencia = "ALTA" if mme9.iloc[-1] > mme21.iloc[-1] else "BAIXA"
-            if tendencia == "ALTA": score += 15; motivos.append("Tendência Alta")
-            else: score -= 15
-            
-            status_macd = "COMPRA" if macd_line.iloc[-1] > signal_line.iloc[-1] else "VENDA"
-            if status_macd == "COMPRA": score += 5; motivos.append("MACD Positivo")
-            if vol_relativo > 1.2: score += 5; motivos.append("Volume Forte")
+            # ========================================================
+            # MOTOR 1: FIIs (Foco: Estabilidade, Renda e Segurança)
+            # ========================================================
+            if is_fii:
+                limite_liq = 300000 
+                
+                # A. Liquidez (Eliminatória)
+                if vol_fin_medio < limite_liq: 
+                    score -= 30; alertas.append(f"Baixa Liquidez ({vol_fin_medio/1000:.0f}k)")
 
-            # Valuation Score
-            # Usa o preco_justo calculado corretamente (Só Bazin p/ FII, Média p/ Ações)
-            if preco_justo > 0 and preco_atual < preco_justo: 
-                score += 15; motivos.append("Desconto Valuation")
-            elif preco_justo > 0: 
-                score -= 10
+                # B. P/VP (O Rei dos FIIs)
+                if pvp > 0:
+                    if 0.90 <= pvp <= 1.05: 
+                        score += 20; motivos.append(f"P/VP Atrativo ({pvp:.2f})")
+                    elif pvp > 1.10: 
+                        score -= 15; alertas.append(f"FII Caro (P/VP {pvp:.2f})")
+                    elif pvp < 0.80: 
+                        score -= 10; alertas.append(f"Desconto Excessivo/Risco ({pvp:.2f})")
+                    
+                    # Trava de Ágio em Papel (Regra de Ouro)
+                    if "Papel" in setor_ativo and pvp > 1.03: 
+                        score = 0; alertas.append("⛔ ÁGIO EM PAPEL")
 
-            if dy_anual > 6.0: score += 10; motivos.append(f"DY {dy_anual:.1f}%")
-            if rsi < 30: score += 10; motivos.append("RSI Sobrevendido")
+                # C. Dividend Yield (O Objetivo)
+                if dy_anual > 9.0: score += 20; motivos.append(f"DY Alto {dy_anual:.1f}%")
+                elif dy_anual > 6.0: score += 10; motivos.append("DY OK")
+                else: score -= 10; alertas.append(f"DY Baixo {dy_anual:.1f}%")
 
+                # D. Volatilidade (FII bom é FII chato)
+                if volatilidade < 0.15: score += 10; motivos.append("Baixa Volatilidade")
+                elif volatilidade > 0.30: score -= 10; alertas.append("Alta Volatilidade")
+
+                # E. Tendência (Suave)
+                if mme9.iloc[-1] > mme21.iloc[-1]: score += 5 # Peso menor que ações
+                
+            # ========================================================
+            # MOTOR 2: AÇÕES (Foco: Crescimento, Momento e Valor)
+            # ========================================================
+            else: 
+                limite_liq = 1000000
+                if vol_fin_medio < limite_liq: score -= 20; alertas.append("Baixa Liquidez")
+
+                # A. Tendência (Trade Follower)
+                if mme9.iloc[-1] > mme21.iloc[-1]: 
+                    score += 20; motivos.append("Tendência Alta (9x21)")
+                else: 
+                    score -= 15; alertas.append("Tendência Baixa")
+
+                # B. MACD (Momento)
+                if macd_line.iloc[-1] > signal_line.iloc[-1]: 
+                    score += 10; motivos.append("MACD Compra")
+
+                # C. Volume (Interesse Institucional)
+                if vol_relativo > 1.3: score += 5; motivos.append("Volume Forte")
+
+                # D. Valuation (Desconto)
+                if preco_justo > 0:
+                    upside = (preco_justo - preco_atual) / preco_atual
+                    if upside > 0.20: score += 15; motivos.append(f"Upside +{upside*100:.0f}%")
+                    elif upside < 0: score -= 10
+
+                # E. RSI (Sobrevendido)
+                if rsi < 30: score += 10; motivos.append("RSI Sobrevendido")
+                elif rsi > 75: score -= 10; alertas.append("RSI Esticado")
+
+            # --- FECHAMENTO DO SCORE ---
             score = min(100, max(0, score))
             if "⛔ ÁGIO EM PAPEL" in alertas: score = 0
+
+            # Cálculos Técnicos Finais
+            tendencia = "ALTA" if mme9.iloc[-1] > mme21.iloc[-1] else "BAIXA"
+            status_macd = "COMPRA" if macd_line.iloc[-1] > signal_line.iloc[-1] else "VENDA"
 
             return {
                 "preco": preco_atual,
