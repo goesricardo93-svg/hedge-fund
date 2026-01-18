@@ -10,7 +10,7 @@ from email.mime.text import MIMEText
 # ======================================================
 # 1. CONFIGURAÇÕES & SEGREDOS
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 17.0", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 18.0", layout="wide")
 
 try:
     TELEGRAM_TOKEN = st.secrets["telegram"]["token"]
@@ -24,7 +24,7 @@ except:
     EMAIL_PASS = ""
 
 # ======================================================
-# 2. MOTOR DE ANÁLISE (CÉREBRO)
+# 2. MOTOR DE ANÁLISE (COM CORREÇÃO DE DY)
 # ======================================================
 class MotorAnalise:
     def analisar(self, hist, info, ticker):
@@ -36,7 +36,7 @@ class MotorAnalise:
             if isinstance(fechamento, pd.DataFrame): fechamento = fechamento.iloc[:, 0]
             preco_atual = float(fechamento.iloc[-1])
             
-            # TÉCNICA
+            # TÉCNICA (RSI, Volatilidade)
             delta = fechamento.diff()
             gain = delta.clip(lower=0).rolling(14).mean()
             loss = -delta.clip(upper=0).rolling(14).mean()
@@ -54,13 +54,21 @@ class MotorAnalise:
             stop_loss = suporte * 0.97
             stop_gain = resistencia * 1.02
 
-            # FUNDAMENTOS
+            # FUNDAMENTOS (DY CORRIGIDO)
             dy = info.get("dividendYield", 0) or 0
+            
+            # --- FIX: NORMALIZAÇÃO DE DY ---
+            # Se vier 12.14 (12%), divide por 100 para virar 0.1214
+            # Se vier 0.1214, mantém.
+            # Assumimos que nenhum ativo paga > 200% de DY regularmente, então > 2.0 é erro de escala.
+            if dy > 2.0: 
+                dy = dy / 100
+                
             lpa = info.get("trailingEps", 0) or 0
             vpa = info.get("bookValue", 0) or 0
             
             # Preços Justos
-            dpa = preco_atual * dy
+            dpa = preco_atual * dy # Agora dy está correto (0.xx)
             p_bazin = dpa / 0.06 if dpa > 0 else 0
             p_graham = np.sqrt(22.5 * lpa * vpa) if (lpa > 0 and vpa > 0) else 0
             p_gordon = p_bazin # Proxy
@@ -69,10 +77,12 @@ class MotorAnalise:
             score = 50
             motivos = []
 
+            # Lógica Valuation
             if p_bazin > 0 and preco_atual < p_bazin: score += 20; motivos.append("Desconto Bazin")
             if p_graham > 0 and preco_atual < p_graham: score += 20; motivos.append("Desconto Graham")
-            if dy > 0.06: score += 10; motivos.append("Dividendos > 6%")
+            if dy > 0.06: score += 10; motivos.append(f"Dividendos Atrativos ({dy*100:.1f}%)")
 
+            # Lógica Técnica
             if rsi < 30: score += 20; motivos.append("RSI Sobrevendido")
             elif rsi > 70: score -= 20; motivos.append("RSI Sobrecomprado")
             
@@ -91,7 +101,7 @@ class MotorAnalise:
                 "p_bazin": p_bazin,
                 "p_graham": p_graham,
                 "p_gordon": p_gordon,
-                "dy": dy,
+                "dy": dy, # Agora normalizado
                 "suporte": suporte,
                 "resistencia": resistencia,
                 "stop_loss": stop_loss,
@@ -131,9 +141,8 @@ def disparar_alerta(titulo, corpo):
         )
     except: pass
 
-# --- FUNÇÃO RENOMEADA E PADRONIZADA ---
 @st.cache_data(ttl=3600)
-def obter_dados_final(ticker):
+def obter_dados_seguros_v6(ticker): # v6 para limpar cache anterior com erro de DY
     try:
         t = yf.Ticker(ticker)
         hist = t.history(period="2y")
@@ -152,6 +161,7 @@ def scanner_fiis_csv(uploaded_file):
     try:
         df = pd.read_csv(uploaded_file, sep=";", encoding="latin-1")
         
+        # Limpeza Numérica BR
         def limpar_numero(x):
             if isinstance(x, str):
                 x = x.replace('%', '').replace('.', '').replace(',', '.')
@@ -176,6 +186,7 @@ def scanner_fiis_csv(uploaded_file):
         df["VAC_N"] = df[col_vac].apply(limpar_numero) if col_vac else 0
         df["LIQ_N"] = df[col_liq].apply(limpar_numero) if col_liq else 0
         
+        # Lógica "Análise 360"
         def analise_360_fii(row):
             p_vp = row["PVP_N"]
             vac = row["VAC_N"]
@@ -193,6 +204,7 @@ def scanner_fiis_csv(uploaded_file):
 
         df["Veredito 360"] = df.apply(analise_360_fii, axis=1)
 
+        # Cálculo de Score
         def calc_score(row):
             s = 50
             if row["DY_N"] > 9: s += 20
@@ -266,8 +278,7 @@ tabs = st.tabs(["🔎 Análise Técnica", "💼 Carteira Geral", "🏢 Scanner F
 # --- ABA 1: ANÁLISE ---
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
-    # CHAMADA CORRIGIDA AQUI:
-    r = obter_dados_final(ticker_input)
+    r = obter_dados_seguros_v6(ticker_input)
     
     if r:
         col_ia1, col_ia2 = st.columns([1, 3])
@@ -297,6 +308,7 @@ with tabs[0]:
         
         with c_fund:
             st.subheader("📊 Fundamentos")
+            # DY já está normalizado no Motor (0.12), então x100 = 12%
             fund_data = {"Indicador": ["DY", "P/L", "P/VP", "ROE"], "Valor": [f"{r['dy']*100:.1f}%", f"{r['pl']:.1f}", f"{r['pvp']:.2f}", f"{r['roe']*100:.1f}%"]}
             st.dataframe(pd.DataFrame(fund_data), use_container_width=True)
 
@@ -316,7 +328,6 @@ with tabs[0]:
                                             low=hist_chart["Low"].iloc[:,0] if isinstance(hist_chart["Low"], pd.DataFrame) else hist_chart["Low"],
                                             close=close, name="Preço"))
                 
-                # LINHA CORRIGIDA:
                 fig.add_trace(go.Scatter(x=hist_chart.index, y=mm50, name="MM50", line=dict(color='blue', width=1)))
 
                 fig.add_hline(y=r['suporte'], line_dash="dot", line_color="green", annotation_text="SUPORTE")
@@ -339,8 +350,7 @@ with tabs[1]:
         bar = st.progress(0)
         total = len(df_ed)
         for i, row in df_ed.iterrows():
-            # CHAMADA CORRIGIDA AQUI TAMBÉM:
-            r = obter_dados_final(row["Ticker"])
+            r = obter_dados_seguros_v6(row["Ticker"])
             if r:
                 rec = r['decisao_ia']
                 if r['preco'] < row['PM'] * 0.95 and "COMPRA" in rec: rec = "🔥 COMPRA FORTE (Abaixo PM)"
@@ -352,7 +362,8 @@ with tabs[1]:
                     "Lucro": (r["preco"] - row["PM"]) * row["Qtd"],
                     "Veredito IA": rec,
                     "Score": r['score_ia'],
-                    "Bazin": r["p_bazin"]
+                    "Bazin": r["p_bazin"],
+                    "DY": f"{r['dy']*100:.1f}%" # DY Normalizado
                 })
             bar.progress((i+1)/total)
         
