@@ -121,53 +121,50 @@ class MotorAnalise:
             res.append(bal)
         return np.array(res)
 
-    # --- CORREÇÃO DIVIDENDOS (LÓGICA TEMPORAL) ---
+    # --- LÓGICA DE DIVIDENDOS (PASSADO + FUTURO) ---
     def consultar_dividendos(self, ticker):
         try:
             t = yf.Ticker(ticker)
-            hoje = pd.Timestamp.now().normalize() # Data de hoje sem horas
-
-            # 1. Prepara dados do Histórico (Último Pago)
-            # Isso é o certo se não houver nada NO FUTURO
-            ultimo_pagamento_info = {"status": "SEM DADOS", "data": "-", "valor": "-"}
-            divs = t.dividends
+            hoje = pd.Timestamp.now().normalize()
             
-            if not divs.empty:
-                data_ult = divs.index[-1]
-                val_ult = float(divs.iloc[-1])
-                ultimo_pagamento_info = {
-                    "status": "ÚLTIMO PAGO",
-                    "data": data_ult.strftime('%d/%m/%Y'),
-                    "valor": f"R$ {val_ult:.2f}"
-                }
+            resultado = {
+                "ultimo_data": "-",
+                "ultimo_valor": "-",
+                "proximo_data": "-",
+                "proximo_valor": "-",
+                "status": "NEUTRO"
+            }
 
-            # 2. Verifica Calendário (SÓ SE FOR FUTURO)
+            # 1. BUSCA O PASSADO (Último Pago)
+            try:
+                divs = t.dividends
+                if not divs.empty:
+                    data_ult = divs.index[-1]
+                    val_ult = float(divs.iloc[-1])
+                    resultado["ultimo_data"] = data_ult.strftime('%d/%m/%Y')
+                    resultado["ultimo_valor"] = f"R$ {val_ult:.2f}"
+            except: pass
+
+            # 2. BUSCA O FUTURO (Calendário)
             try:
                 cal = t.calendar
                 data_futura = None
                 
-                # Tenta extrair data futura do calendário bagunçado do Yahoo
+                # Tratamento para formatos do Yahoo
                 if isinstance(cal, dict):
-                    dt = cal.get('Dividend Date') or cal.get('Ex-Dividend Date')
-                    if dt: data_futura = pd.to_datetime(dt)
+                    raw_date = cal.get('Dividend Date') or cal.get('Ex-Dividend Date')
+                    if raw_date: data_futura = pd.to_datetime(raw_date)
                 elif isinstance(cal, pd.DataFrame) and not cal.empty:
-                    # Tenta pegar a primeira data disponível no DF
                     data_futura = pd.to_datetime(cal.iloc[0, 0])
 
-                # AQUI ESTÁ A CORREÇÃO:
-                # Se achou uma data E ela é MAIOR que hoje, então é um anúncio confirmado.
-                # Se a data do calendário for velha (ex: 2025-12-16), ele ignora e cai no histórico.
+                # Se existe data futura E ela é maior que hoje
                 if data_futura and data_futura > hoje:
-                    return {
-                        "status": "CONFIRMADO",
-                        "data": data_futura.strftime('%d/%m/%Y'),
-                        "valor": "Aguardando Valor" # Yahoo raramente dá o valor futuro
-                    }
-            except:
-                pass # Se der erro lendo o calendário, apenas ignora e usa o histórico
+                    resultado["proximo_data"] = data_futura.strftime('%d/%m/%Y')
+                    resultado["proximo_valor"] = "Aguardando Anúncio" # Yahoo não costuma dar o valor futuro exato
+                    resultado["status"] = "AGENDA"
+            except: pass
 
-            # Se não tem futuro, retorna o histórico
-            return ultimo_pagamento_info
+            return resultado
 
         except:
-            return {"status": "ERRO", "data": "-", "valor": "-"}
+            return {"ultimo_data": "-", "ultimo_valor": "-", "proximo_data": "-", "proximo_valor": "-", "status": "ERRO"}

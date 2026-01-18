@@ -19,13 +19,13 @@ except ImportError as e:
     st.error(f"Erro Crítico de Arquitetura: Faltam arquivos modulares. Detalhes: {e}")
     st.stop()
 
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 43.0", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 44.0", layout="wide")
 
 # ======================================================
 # 2. CACHE E FUNÇÕES UTILITÁRIAS
 # ======================================================
 @st.cache_data(ttl=3600)
-def obter_dados_v43(ticker): 
+def obter_dados_v44(ticker): 
     try:
         t = yf.Ticker(ticker)
         hist = t.history(period="2y")
@@ -88,7 +88,7 @@ if (hoje.day == 1 or forcar_envio) and f"report_{mes_str}" not in st.session_sta
         try:
             res_auto = []
             for _, row in st.session_state.carteira_acoes.iterrows():
-                r = obter_dados_v43(row["Ticker"])
+                r = obter_dados_v44(row["Ticker"])
                 if r:
                     res_auto.append({
                         "Ticker": row["Ticker"],
@@ -110,6 +110,10 @@ if (hoje.day == 1 or forcar_envio) and f"report_{mes_str}" not in st.session_sta
 # 5. INTERFACE
 # ======================================================
 st.sidebar.title("📊 Hedge Fund Ricardo")
+if st.sidebar.button("🧹 Limpar Cache do Sistema"):
+    st.cache_data.clear()
+    st.toast("Memória limpa!", icon="🧹")
+
 ticker_raw = st.sidebar.text_input("🔍 Analisar Ticker:", "BBAS3").upper()
 ticker_input = formatar_ticker(ticker_raw)
 
@@ -119,20 +123,35 @@ if st.sidebar.button("🔄 Restaurar Padrões"):
 
 tabs = st.tabs(["🔎 Análise", "💼 Carteira", "🏢 FIIs 360", "🛡️ RF & PGBL", "💰 Futuro", "🦁 Fiscal"])
 
-# --- ABA 1: ANÁLISE ---
+# --- ABA 1: ANÁLISE (VISUALIZAÇÃO DE DIVIDENDOS DUPLA) ---
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
     motor = MotorAnalise()
-    r = obter_dados_v43(ticker_input)
+    r = obter_dados_v44(ticker_input)
     
     if r:
         div_info = motor.consultar_dividendos(ticker_input)
-        if div_info['status'] != "SEM DADOS":
-            cor = "green" if div_info['status'] == "CONFIRMADO" else "blue"
-            st.markdown(f"""
-            <div style="padding:10px; border-radius:5px; background-color:rgba(0,100,0,0.1); border:1px solid {cor}; margin-bottom:10px;">
-                💰 <b>PROVENTOS ({div_info['status']}):</b> Data: <b>{div_info['data']}</b> | Valor: <b>{div_info['valor']}</b>
-            </div>""", unsafe_allow_html=True)
+        
+        # Cor do box baseada se tem agenda futura ou não
+        cor_box = "green" if div_info['status'] == "AGENDA" else "blue"
+        
+        # HTML para mostrar PASSADO e FUTURO
+        st.markdown(f"""
+        <div style="padding:15px; border-radius:10px; background-color:rgba(0,100,0,0.05); border:1px solid {cor_box}; margin-bottom:15px;">
+            <h4 style="margin-top:0; color:{cor_box};">💰 Relatório de Proventos</h4>
+            <table style="width:100%; border:none;">
+                <tr>
+                    <td style="font-weight:bold;">⏪ Último Pago:</td>
+                    <td>{div_info['ultimo_data']}</td>
+                    <td><b>{div_info['ultimo_valor']}</b></td>
+                </tr>
+                <tr>
+                    <td style="font-weight:bold; color:{cor_box};">⏩ Próximo (Prev):</td>
+                    <td>{div_info['proximo_data']}</td>
+                    <td><b>{div_info['proximo_valor']}</b></td>
+                </tr>
+            </table>
+        </div>""", unsafe_allow_html=True)
 
         col_ia1, col_ia2 = st.columns([1, 3])
         col_ia1.metric("Score IA", f"{r['score_ia']}/100")
@@ -163,12 +182,10 @@ with tabs[0]:
                 "Valor": [f"{r['dy']*100:.2f}%", f"{r['pl']:.2f}", f"{r['pvp']:.2f}", f"{r['roe']*100:.1f}%", f"{r['divida_ebitda']:.2f}x"]
             }), use_container_width=True)
 
-        # --- GRÁFICO (CORRIGIDO: NOME DA VARIÁVEL) ---
         st.subheader("📈 Gráfico Técnico")
         try:
-            hist = yf.download(ticker_input, period="2y", progress=False) # Variável 'hist' unificada
+            hist = yf.download(ticker_input, period="2y", progress=False)
             if not hist.empty:
-                # Função para garantir que os dados sejam Series (1D)
                 def fix_data(col_name):
                     if col_name in hist.columns:
                         d = hist[col_name]
@@ -213,7 +230,7 @@ with tabs[1]:
         bar = st.progress(0)
         total = len(df_ed)
         for i, row in df_ed.iterrows():
-            r = obter_dados_v43(row["Ticker"])
+            r = obter_dados_v44(row["Ticker"])
             if r:
                 rec = r['decisao_ia']
                 if r['preco'] < row['PM'] * 0.95 and r['score_ia'] > 60: rec = "🔥 COMPRA (Abaixo PM)"
@@ -255,7 +272,6 @@ with tabs[2]:
             st.success(f"{len(df_fii)} FIIs processados!")
             t1, t2, t3, t4, t5 = st.tabs(["🌎 Todos", "📄 Papel", "🧱 Tijolo", "🌱 Agro", "⚙️ Outros"])
             cols = ["TICKER", "CATEGORIA", "PRECO", "DY", "P/VP", "Score", "Veredito", "Motivos (IA)"]
-            
             t1.dataframe(df_fii[cols].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
             t2.dataframe(df_fii[df_fii["CATEGORIA"]=="PAPEL"][cols].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
             t3.dataframe(df_fii[df_fii["CATEGORIA"]=="TIJOLO"][cols].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
@@ -286,7 +302,6 @@ with tabs[4]:
             hist = download_historico_longo(df_ed["Ticker"].tolist())
             retornos = hist.pct_change().dropna().mean(axis=1)
             motor = MotorAnalise()
-            
             prop = real_acoes / (real_acoes + real_rf) if (real_acoes + real_rf) > 0 else 1.0
             sim_risco = motor.monte_carlo_carteira(retornos, sim_ini * prop, sim_apt * prop, 10, 1000)
             
