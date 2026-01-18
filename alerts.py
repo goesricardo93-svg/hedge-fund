@@ -1,21 +1,23 @@
 import requests
 import streamlit as st
+from email.mime.text import MIMEText
+import smtplib
 
-def alerta(mensagem):
-    """
-    Envia uma mensagem para o Telegram configurado nos secrets.
-    """
+def get_creds():
     try:
-        # Tenta pegar as credenciais. Se não existirem, silencia o erro.
-        if "telegram" in st.secrets:
-            token = st.secrets["telegram"]["token"]
-            chat = st.secrets["telegram"]["chat_id"]
-            
-            if token and chat:
-                url = f"https://api.telegram.org/bot{token}/sendMessage"
-                data = {"chat_id": chat, "text": mensagem}
-                requests.post(url, data=data, timeout=5)
-    except Exception as e:
-        # Em produção, pode ser útil logar o erro, mas aqui evitamos travar o app
-        print(f"Erro ao enviar alerta: {e}")
-        pass
+        return {
+            "tg_token": st.secrets["telegram"]["token"],
+            "tg_chat": st.secrets["telegram"]["chat_id"]
+        }
+    except:
+        return {}
+
+def disparar_alerta(titulo, corpo):
+    creds = get_creds()
+    if creds.get("tg_token"):
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{creds['tg_token']}/sendMessage",
+                data={"chat_id": creds["tg_chat"], "text": f"🚨 *{titulo}*\n\n{corpo}", "parse_mode": "Markdown"}
+            )
+        except: pass

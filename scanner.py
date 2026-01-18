@@ -19,7 +19,7 @@ def scanner_fiis_csv(uploaded_file):
         col_liq = mapa.get("LIQUIDEZ MEDIA DIARIA")
         col_ticker = mapa.get("TICKER") or mapa.get("ATIVO")
         col_preco = mapa.get("PRECO") or mapa.get("PREÇO") or mapa.get("COTACAO")
-        col_seg = mapa.get("SEGMENTO")
+        col_seg = mapa.get("SEGMENTO") or mapa.get("SETOR")
 
         if not (col_dy and col_pvp and col_ticker): return pd.DataFrame()
 
@@ -27,41 +27,52 @@ def scanner_fiis_csv(uploaded_file):
         df["PVP_N"] = df[col_pvp].apply(limpar_numero)
         df["VAC_N"] = df[col_vac].apply(limpar_numero) if col_vac else 0
         df["LIQ_N"] = df[col_liq].apply(limpar_numero) if col_liq else 0
+        df["SEGMENTO_N"] = df[col_seg].astype(str).str.upper().fillna("OUTROS") if col_seg else "OUTROS"
+
+        # --- CLASSIFICAÇÃO INTELIGENTE ---
+        def classificar_segmento(s):
+            if any(x in s for x in ["PAPEL", "RECEB", "CRI", "CRA", "TÍTULO", "TITULO", "VAL. MOB", "FINANCEIRO"]): return "PAPEL"
+            if any(x in s for x in ["TIJOLO", "LAJE", "LOG", "SHOP", "VAR", "HIBRIDO", "HÍBRIDO", "INDUSTRIAL", "EDUCACIONAL", "HOSPITAL"]): return "TIJOLO"
+            if any(x in s for x in ["AGRO", "RURAL", "TERRA", "FIAGRO"]): return "AGRO"
+            return "OUTROS"
+
+        df["CATEGORIA"] = df["SEGMENTO_N"].apply(classificar_segmento)
+
+        # --- SCORE RIGOROSO (Evita notas 100 excessivas) ---
+        def analisar_fii(row):
+            score = 50 
+            motivos = []
+            
+            # DY
+            if row["DY_N"] > 14: score += 5; motivos.append("DY Explosivo (Risco?)")
+            elif row["DY_N"] > 9: score += 20; motivos.append("DY Alto")
+            elif row["DY_N"] < 6: score -= 15; motivos.append("DY Baixo")
+
+            # P/VP
+            if 0.85 <= row["PVP_N"] <= 1.05: score += 20; motivos.append("Preço Justo")
+            elif row["PVP_N"] < 0.80: score += 15; motivos.append("Desconto Patrimonial") 
+            elif row["PVP_N"] > 1.15: score -= 20; motivos.append("Caro (Ágio)")
+
+            # Vacância (Só penaliza tijolo)
+            if row["CATEGORIA"] == "TIJOLO":
+                if row["VAC_N"] > 15: score -= 30; motivos.append("Vacância Alta")
+                elif row["VAC_N"] < 5: score += 10; motivos.append("Ocupação Alta")
+
+            # Liquidez
+            if row["LIQ_N"] < 200000: score -= 10; motivos.append("Baixa Liquidez")
+            
+            score = min(100, max(0, score))
+            
+            if score >= 75: veredito = "🔥 COMPRA FORTE"
+            elif score >= 60: veredito = "🟢 COMPRA"
+            elif score <= 40: veredito = "🔴 EVITAR"
+            else: veredito = "⚪ MANTER"
+
+            return pd.Series([score, ", ".join(motivos), veredito])
+
+        df[["Score", "Motivos (IA)", "Veredito"]] = df.apply(analisar_fii, axis=1)
         
-        # Lógica "Análise 360"
-        def analise_360_fii(row):
-            p_vp = row["PVP_N"]
-            vac = row["VAC_N"]
-            seg = str(row[col_seg]).upper() if col_seg else ""
-            
-            if "PAPEL" in seg or "RECEB" in seg:
-                if 0.90 <= p_vp <= 1.02: return "🔥 COMPRA (Papel)"
-                return "⚪ OBSERVAR"
-            
-            if vac < 10 and p_vp < 0.95: return "🏢 OPORTUNIDADE (Tijolo)"
-            if vac > 15: return "🔴 CUIDADO (Vacância)"
-            
-            if 0.85 <= p_vp <= 1.0: return "✅ VALOR JUSTO"
-            return "⚪ NEUTRO"
-
-        df["Veredito 360"] = df.apply(analise_360_fii, axis=1)
-
-        def calc_score(row):
-            s = 50
-            if row["DY_N"] > 9: s += 20
-            elif row["DY_N"] > 6: s += 10
-            
-            if 0.85 <= row["PVP_N"] <= 1.0: s += 20
-            if row["LIQ_N"] > 1000000: s += 10
-            
-            if row["VAC_N"] > 10: s -= 20
-            if row["PVP_N"] > 1.15: s -= 15
-            
-            return min(100, max(0, s))
-
-        df["Score"] = df.apply(calc_score, axis=1)
-        
-        cols_final = [col_ticker, col_preco, col_dy, col_pvp, "Score", "Veredito 360"]
+        cols_final = [col_ticker, "CATEGORIA", col_preco, col_dy, col_pvp, "Score", "Veredito", "Motivos (IA)"]
         if col_vac: cols_final.append(col_vac)
         
         return df[cols_final].sort_values("Score", ascending=False)
