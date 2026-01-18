@@ -18,13 +18,13 @@ except ImportError as e:
     st.error(f"Erro Crítico: Faltam arquivos modulares ({e}).")
     st.stop()
 
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 36.0 (Fixed)", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 37.0 (Hardcore)", layout="wide")
 
 # ======================================================
 # CACHE E FUNÇÕES
 # ======================================================
 @st.cache_data(ttl=3600)
-def obter_dados_v36(ticker):
+def obter_dados_v37(ticker):
     try:
         t = yf.Ticker(ticker)
         hist = t.history(period="2y")
@@ -47,7 +47,7 @@ def formatar_ticker(ticker):
     return t
 
 # ======================================================
-# SESSION STATE
+# SESSION STATE (CARTEIRA 31 ATIVOS)
 # ======================================================
 if "carteira_acoes" not in st.session_state:
     dados = [
@@ -91,54 +91,97 @@ tabs = st.tabs(["🔎 Análise", "💼 Carteira", "🏢 FIIs 360", "🛡️ RF &
 # --- ABA 1: ANÁLISE ---
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
-    r = obter_dados_v36(ticker_input)
+    
+    # Chama o motor
+    motor = MotorAnalise()
+    r = obter_dados_v37(ticker_input)
     
     if r:
+        # --- DIVIDENDOS (DESTAQUE NO TOPO) ---
+        div_info = motor.consultar_dividendos(ticker_input)
+        if div_info['status'] != "SEM DADOS":
+            cor_div = "green" if div_info['status'] == "CONFIRMADO" else "blue"
+            st.markdown(f"""
+            <div style="padding:10px; border-radius:5px; background-color:rgba(0,100,0,0.1); border:1px solid {cor_div}; margin-bottom:10px;">
+                💰 <b>PROVENTOS ({div_info['status']}):</b> Data: <b>{div_info['data']}</b> | Valor: <b>{div_info['valor']}</b>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # --- SCORE IA ---
         col_ia1, col_ia2 = st.columns([1, 3])
-        col_ia1.metric("Score IA", f"{r['score_ia']}/100")
-        if "COMPRA" in r['decisao_ia']: col_ia2.success(f"### {r['decisao_ia']}")
-        elif "VENDA" in r['decisao_ia']: col_ia2.error(f"### {r['decisao_ia']}")
-        else: col_ia2.warning(f"### {r['decisao_ia']}")
+        col_ia1.metric("Score IA Rigoroso", f"{r['score_ia']}/100")
         
-        st.write(f"**Gatilhos:** {r['motivos']}")
+        if "COMPRA" in r['decisao_ia']: 
+            col_ia2.success(f"### {r['decisao_ia']}")
+        elif "VENDA" in r['decisao_ia']: 
+            col_ia2.error(f"### {r['decisao_ia']}")
+        else: 
+            col_ia2.warning(f"### {r['decisao_ia']}")
+        
+        st.write(f"**Veredito Cruzado (Fund + Téc):** {r['motivos']}")
         st.divider()
 
-        # Plugin de Dividendos (Agora existe no Motor!)
-        div_info = MotorAnalise().consultar_dividendos(ticker_input)
-        
+        # --- DADOS GERAIS ---
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Preço Atual", f"R$ {r['preco']:.2f}")
-        c2.metric("Teto (Alvo IA)", f"R$ {r['stop_gain']:.2f}")
-        c3.metric("RSI", f"{r['rsi']:.0f}")
-        c4.metric(f"Proventos ({div_info['status']})", f"{div_info['valor']}")
+        c2.metric("Teto Técnico", f"R$ {r['stop_gain']:.2f}")
+        c3.metric("RSI (14)", f"{r['rsi']:.0f}")
+        c4.metric("Volatilidade", f"{r['volatilidade']*100:.1f}%")
 
         c_val, c_fund = st.columns(2)
         with c_val:
             st.subheader("📋 Valuation")
-            val_data = {"Modelo": ["Bazin (Div)", "Graham (Patr)", "Gordon (Cresc)"], "Preço Justo": [f"R$ {r['p_bazin']:.2f}", f"R$ {r['p_graham']:.2f}", f"R$ {r['p_gordon']:.2f}"]}
+            val_data = {
+                "Modelo": ["Bazin (Div)", "Graham (Patr)", "Gordon (Cresc)"], 
+                "Preço Justo": [f"R$ {r['p_bazin']:.2f}", f"R$ {r['p_graham']:.2f}", f"R$ {r['p_gordon']:.2f}"]
+            }
             st.dataframe(pd.DataFrame(val_data), use_container_width=True)
+        
         with c_fund:
-            st.subheader("📊 Fundamentos")
-            fund_data = {"Indicador": ["DY", "P/L", "P/VP", "ROE"], "Valor": [f"{r['dy']*100:.2f}%", f"{r['pl']:.2f}", f"{r['pvp']:.2f}", f"{r['roe']*100:.1f}%"]}
+            st.subheader("📊 Qualidade & Saúde")
+            # Exibe os novos indicadores rigorosos
+            fund_data = {
+                "Indicador": ["DY", "P/L", "P/VP", "ROE (Rentab.)", "Dívida/EBITDA"], 
+                "Valor": [
+                    f"{r['dy']*100:.2f}%", 
+                    f"{r['pl']:.2f}", 
+                    f"{r['pvp']:.2f}", 
+                    f"{r['roe']*100:.1f}%", 
+                    f"{r['divida_ebitda']:.2f}x"
+                ]
+            }
             st.dataframe(pd.DataFrame(fund_data), use_container_width=True)
 
+        # --- GRÁFICO ---
         st.subheader("📈 Gráfico Técnico")
         try:
             hist_chart = yf.download(ticker_input, period="2y", progress=False)
             if not hist_chart.empty:
-                # Tratamento robusto para gráfico
+                # Tratamento robusto
                 close = hist_chart["Close"] if "Close" in hist_chart else hist_chart.iloc[:,0]
                 if isinstance(close, pd.DataFrame): close = close.iloc[:,0]
                 
                 mm50 = close.rolling(window=50).mean()
+                mm200 = close.rolling(window=200).mean() # Nova MM200 para tendência longa
+
                 fig = go.Figure()
-                fig.add_trace(go.Candlestick(x=hist_chart.index, open=hist_chart["Open"] if "Open" in hist_chart else hist_chart.iloc[:,0], close=close, high=hist_chart["High"] if "High" in hist_chart else hist_chart.iloc[:,0], low=hist_chart["Low"] if "Low" in hist_chart else hist_chart.iloc[:,0], name="Preço"))
-                fig.add_trace(go.Scatter(x=hist_chart.index, y=mm50, name="MM50", line=dict(color='blue')))
+                fig.add_trace(go.Candlestick(
+                    x=hist_chart.index, 
+                    open=hist_chart["Open"] if "Open" in hist_chart else hist_chart.iloc[:,0], 
+                    high=hist_chart["High"] if "High" in hist_chart else hist_chart.iloc[:,0], 
+                    low=hist_chart["Low"] if "Low" in hist_chart else hist_chart.iloc[:,0], 
+                    close=close, name="Preço"
+                ))
+                fig.add_trace(go.Scatter(x=hist_chart.index, y=mm50, name="MM50 (Curto)", line=dict(color='blue')))
+                fig.add_trace(go.Scatter(x=hist_chart.index, y=mm200, name="MM200 (Longo)", line=dict(color='orange'))) # Nova Linha
+                
                 fig.add_hline(y=r['suporte'], line_dash="dot", line_color="green", annotation_text="SUPORTE")
                 fig.add_hline(y=r['resistencia'], line_dash="dot", line_color="red", annotation_text="RESISTÊNCIA")
                 st.plotly_chart(fig, use_container_width=True)
         except Exception as e: st.error(f"Erro gráfico: {e}")
-    else: st.warning("Ticker não encontrado.")
+
+    else: 
+        st.warning("Ticker não encontrado. Verifique se digitou corretamente (ex: BBAS3).")
 
 # --- ABA 2: CARTEIRA ---
 with tabs[1]:
@@ -154,14 +197,26 @@ with tabs[1]:
         bar = st.progress(0)
         total_ativos = len(df_ed)
         for i, row in df_ed.iterrows():
-            r = obter_dados_v36(row["Ticker"])
+            r = obter_dados_v37(row["Ticker"])
             if r:
                 rec = r['decisao_ia']
                 if r['preco'] < row['PM'] * 0.95 and "COMPRA" in rec: rec = "🔥 COMPRA FORTE (Abaixo PM)"
+                
                 if r['score_ia'] >= 80 and row["Ticker"] not in st.session_state.alertas_enviados:
                     disparar_alerta(f"TOP PICK: {row['Ticker']}", f"Score: {r['score_ia']}")
                     st.session_state.alertas_enviados.add(row["Ticker"])
-                res.append({"Ticker": row["Ticker"], "Preço": r["preco"], "PM": row["PM"], "Qtd": row["Qtd"], "Valor_Atual": row["Qtd"] * r["preco"], "Lucro": (r["preco"] - row["PM"]) * row["Qtd"], "Veredito IA": rec, "Score": r['score_ia'], "DY": f"{r['dy']*100:.2f}%"})
+                
+                res.append({
+                    "Ticker": row["Ticker"],
+                    "Preço": r["preco"],
+                    "PM": row["PM"],
+                    "Qtd": row["Qtd"],
+                    "Valor_Atual": row["Qtd"] * r["preco"],
+                    "Lucro": (r["preco"] - row["PM"]) * row["Qtd"],
+                    "Veredito IA": rec,
+                    "Score": r['score_ia'],
+                    "DY": f"{r['dy']*100:.2f}%"
+                })
             bar.progress((i+1)/total_ativos)
         
         if res:
@@ -172,8 +227,6 @@ with tabs[1]:
             
             if not df_final.empty:
                 st.success("✅ Rebalanceamento Concluído!")
-                
-                # Seleção segura das colunas que existem
                 cols_possiveis = ["Ticker", "Score", "Valor_Atual", "Lucro", "Veredito IA", "Aporte Sugerido (R$)"]
                 cols_exibicao = [c for c in cols_possiveis if c in df_final.columns]
                 
