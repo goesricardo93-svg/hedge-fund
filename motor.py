@@ -19,8 +19,11 @@ class MotorAnalise:
             rs = gain / loss
             rsi = 100 - (100 / (1 + rs.iloc[-1]))
             
+            # Volatilidade (Anualizada)
             retornos = fechamento.pct_change().dropna()
             volatilidade = retornos.std() * (252 ** 0.5)
+            
+            # Drawdown
             topo = fechamento.cummax()
             drawdown = ((fechamento - topo) / topo).min() * 100
 
@@ -30,7 +33,7 @@ class MotorAnalise:
             stop_loss = suporte * 0.97
             stop_gain = resistencia * 1.02
 
-            # FUNDAMENTOS (DY Manual)
+            # FUNDAMENTOS (DY Manual - Blindado)
             div_rate = info.get("trailingAnnualDividendRate", 0) or info.get("dividendRate", 0) or 0
             if div_rate > 0:
                 dy = div_rate / preco_atual
@@ -91,45 +94,69 @@ class MotorAnalise:
         except Exception:
             return None
 
+    # --- MONTE CARLO (GEOMETRIC BROWNIAN MOTION - PADRÃO INSTITUCIONAL) ---
     def monte_carlo_carteira(self, retornos_carteira, valor_inicial, aporte_mensal, anos=10, sims=1000):
+        """
+        Simula usando Movimento Browniano Geométrico (GBM).
+        Isso corrige a distorção de retornos aritméticos em longos prazos.
+        """
         if len(retornos_carteira) == 0: return np.array([])
         
-        mu = retornos_carteira.mean().mean()
-        sigma = retornos_carteira.std().mean()
+        # 1. Estatísticas da Carteira (Log-Retornos para precisão)
+        # Convertendo retornos simples para logarítmicos para projeção
+        log_returns = np.log(1 + retornos_carteira)
         
-        meses = anos * 12
-        dias_mes = 21
-        resultados = []
+        # Média e Desvio Padrão Diários
+        mu_diario = log_returns.mean()
+        sigma_diario = log_returns.std()
         
-        mu_mensal = mu * dias_mes
-        sigma_mensal = sigma * np.sqrt(dias_mes)
+        # 2. Configuração do Tempo
+        dias_uteis_ano = 252
+        total_dias = anos * dias_uteis_ano
+        passos_por_mes = 21 # Aprox dias úteis por mês para injetar o aporte
+        
+        resultados_finais = []
 
+        # 3. Simulação Vetorizada
+        # Drift (Tendência) e Difusão (Volatilidade)
+        # No GBM: S_t = S_0 * exp( (mu - 0.5*sigma^2)*t + sigma*W_t )
+        
+        drift = (mu_diario - 0.5 * sigma_diario**2)
+        
         for _ in range(sims):
-            pat = valor_inicial
-            for _ in range(meses):
-                retorno_mes = np.random.normal(mu_mensal, sigma_mensal)
-                pat = pat * (1 + retorno_mes) + aporte_mensal
-            resultados.append(pat)
-        return np.array(resultados)
+            saldo = valor_inicial
+            
+            # Gera todos os choques aleatórios de uma vez para os 10 anos (performance)
+            choques = np.random.normal(0, 1, total_dias)
+            
+            # Caminho diário dos retornos
+            retornos_diarios_sim = np.exp(drift + sigma_diario * choques)
+            
+            # Acumula dia a dia para poder injetar o aporte mensalmente
+            dia_atual = 0
+            for r in retornos_diarios_sim:
+                saldo = saldo * r
+                dia_atual += 1
+                
+                # A cada 21 dias (1 mês útil), injeta o aporte
+                if dia_atual % passos_por_mes == 0:
+                    saldo += aporte_mensal
+            
+            resultados_finais.append(saldo)
 
-    # --- NOVO: PLUGIN DE DIVIDENDOS ---
+        return np.array(resultados_finais)
+
     def consultar_dividendos(self, ticker):
-        """Busca calendário oficial ou projeta baseado no último pagamento"""
         try:
             t = yf.Ticker(ticker)
-            # Tenta pegar calendário futuro
             cal = t.calendar
             if cal and not cal.empty:
-                # Retorna próxima data ex ou pagamento
                 return {"status": "CONFIRMADO", "data": cal.get("Dividend Date", "N/A"), "valor": "Verificar RI"}
-            
-            # Se não tiver calendário futuro, pega histórico recente
             divs = t.dividends
             if not divs.empty:
                 ultimo = divs.iloc[-1]
                 data = divs.index[-1].strftime('%d/%m/%Y')
                 return {"status": "ÚLTIMO PAGO", "data": data, "valor": f"R$ {ultimo:.2f}"}
-            
             return {"status": "SEM DADOS", "data": "-", "valor": "-"}
         except:
             return {"status": "ERRO", "data": "-", "valor": "-"}

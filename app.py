@@ -13,18 +13,18 @@ try:
     from scanner import scanner_fiis_csv
     from alerts import disparar_alerta
     from rebalance import rebalancear_e_aportar
-    from tax import calcular_darf # NOVO PLUGIN
+    from tax import calcular_darf
 except ImportError as e:
     st.error(f"Erro Crítico: Faltam arquivos modulares ({e}).")
     st.stop()
 
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 31.0", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 33.0 (Input Flexível)", layout="wide")
 
 # ======================================================
 # CACHE INTELIGENTE E FUNÇÕES
 # ======================================================
 @st.cache_data(ttl=3600)
-def obter_dados_v31(ticker):
+def obter_dados_v33(ticker): # v33 para limpar cache
     try:
         t = yf.Ticker(ticker)
         hist = t.history(period="2y")
@@ -32,10 +32,9 @@ def obter_dados_v31(ticker):
         return MotorAnalise().analisar(hist, t.info, ticker)
     except: return None
 
-# CACHE NOVO PARA EVITAR RATE LIMIT NO MONTE CARLO
-@st.cache_data(ttl=86400) # Cache de 24 horas para histórico longo
+@st.cache_data(ttl=86400)
 def download_historico_longo(tickers):
-    return yf.download(tickers, period="5y", progress=False)["Close"]
+    return yf.download(tickers, period="5y", progress=False)["Adj Close"]
 
 def formatar_ticker(ticker):
     t = ticker.strip().upper()
@@ -93,7 +92,7 @@ tabs = st.tabs(["🔎 Análise", "💼 Carteira", "🏢 FIIs 360", "🛡️ RF &
 # --- ABA 1: ANÁLISE ---
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
-    r = obter_dados_v31(ticker_input)
+    r = obter_dados_v33(ticker_input)
     
     if r:
         col_ia1, col_ia2 = st.columns([1, 3])
@@ -105,7 +104,6 @@ with tabs[0]:
         st.write(f"**Gatilhos:** {r['motivos']}")
         st.divider()
 
-        # Dados de Dividendos (NOVO)
         div_info = MotorAnalise().consultar_dividendos(ticker_input)
         
         c1, c2, c3, c4 = st.columns(4)
@@ -153,7 +151,7 @@ with tabs[1]:
         res = []
         bar = st.progress(0)
         for i, row in df_ed.iterrows():
-            r = obter_dados_v31(row["Ticker"])
+            r = obter_dados_v33(row["Ticker"])
             if r:
                 rec = r['decisao_ia']
                 if r['preco'] < row['PM'] * 0.95 and "COMPRA" in rec: rec = "🔥 COMPRA FORTE (Abaixo PM)"
@@ -165,9 +163,9 @@ with tabs[1]:
         
         if res:
             df_res = pd.DataFrame(res)
+            st.session_state.df_analisado = df_res 
             df_final = rebalancear_e_aportar(df_res, aporte_user)
             st.success("✅ Rebalanceamento Concluído!")
-            
             def cor_lucro(val): return 'color: green' if val > 0 else 'color: red'
             st.dataframe(df_final[["Ticker", "Score", "Valor_Atual", "Lucro", "Veredito IA", "Aporte Sugerido (R$)"]].style.applymap(cor_lucro, subset=["Lucro"]).format({"Valor_Atual": "R$ {:.2f}", "Lucro": "R$ {:.2f}", "Aporte Sugerido (R$)": "R$ {:.2f}"}).background_gradient(subset=["Aporte Sugerido (R$)"], cmap="Greens"), use_container_width=True)
 
@@ -196,39 +194,102 @@ with tabs[3]:
     st.metric("Total em Renda Fixa", f"R$ {df_rf['Saldo Atual'].sum():,.2f}")
     st.plotly_chart(go.Figure(data=[go.Pie(labels=df_rf["Ativo"], values=df_rf["Saldo Atual"], hole=.4)]), use_container_width=True)
 
-# --- ABA 5: FUTURO (CACHE ATIVADO) ---
+# --- ABA 5: FUTURO (COM INPUT FLEXÍVEL) ---
 with tabs[4]:
     st.subheader("🔮 Simulação Patrimonial (Monte Carlo Real)")
-    if not df_ed.empty:
-        patr_acoes = (df_ed['Qtd'] * df_ed['PM']).sum()
-        patr_rf = st.session_state.carteira_rf["Saldo Atual"].sum()
-        st.metric("Patrimônio Total", f"R$ {patr_acoes + patr_rf:,.2f}")
-        aporte = st.number_input("Aporte Mensal", 2000.0)
-        
-        if st.button("Simular 10 Anos"):
-            tickers = df_ed["Ticker"].tolist()
-            try:
-                # USO DE CACHE AQUI:
-                hist = download_historico_longo(tickers)
-                retornos = hist.pct_change().dropna()
-                motor = MotorAnalise()
-                
-                sims_risco = motor.monte_carlo_carteira(retornos, patr_acoes, aporte * 0.7, 10, 1000)
-                
-                meses = 120
-                rf_futuro = patr_rf * (1.008 ** meses) + (aporte * 0.3 * meses)
-                sims_total = sims_risco + rf_futuro
-                
-                st.plotly_chart(go.Figure(go.Histogram(x=sims_total, nbinsx=40, marker_color='green')), use_container_width=True)
-                st.metric("Mediana Esperada", f"R$ {np.median(sims_total):,.2f}")
-            except Exception as e: st.error(f"Erro na simulação: {e}")
+    
+    # 1. Calcula os valores reais atuais
+    if "df_analisado" in st.session_state and not st.session_state.df_analisado.empty:
+        real_acoes = st.session_state.df_analisado["Valor_Atual"].sum()
+    elif not df_ed.empty:
+        real_acoes = (df_ed['Qtd'] * df_ed['PM']).sum()
+    else:
+        real_acoes = 0
 
-# --- ABA 6: FISCAL (NOVO PLUGIN) ---
+    real_rf = st.session_state.carteira_rf["Saldo Atual"].sum()
+    real_total = real_acoes + real_rf
+    
+    # 2. Permite o usuário alterar o Valor Inicial para simulação
+    st.markdown("### ⚙️ Parâmetros da Simulação")
+    col_input1, col_input2 = st.columns(2)
+    
+    with col_input1:
+        # O valor padrão é o real, mas o usuário pode editar
+        sim_inicial = st.number_input("💰 Patrimônio Inicial (Simulado)", value=float(real_total), step=1000.0)
+    with col_input2:
+        sim_aporte = st.number_input("➕ Aporte Mensal", value=2000.0, step=100.0)
+    
+    if st.button("Simular 10 Anos"):
+        tickers = df_ed["Ticker"].tolist()
+        try:
+            # Baixa histórico real ajustado
+            hist = download_historico_longo(tickers)
+            retornos_diarios = hist.pct_change().dropna().mean(axis=1)
+            
+            motor = MotorAnalise()
+            
+            # --- LÓGICA PROPORCIONAL ---
+            # Se o usuário mudou o valor inicial, mantemos a proporção da carteira original
+            # Ex: Se ele tem 70% em ações e 30% em RF, o valor simulado será dividido assim.
+            
+            if real_total > 0:
+                prop_risco = real_acoes / real_total
+            else:
+                prop_risco = 1.0 # Se não tiver nada, assume 100% risco para simular
+            
+            # Divide o capital inicial simulado
+            sim_start_risco = sim_inicial * prop_risco
+            sim_start_rf = sim_inicial * (1 - prop_risco)
+            
+            # Simula a parte de risco com GBM (Geometric Brownian Motion)
+            # Assumimos que o aporte vai integralmente para risco ou mantém proporção?
+            # Para simulação de crescimento agressivo, vamos assumir aporte 100% no risco (ou usuário ajusta)
+            # Aqui vamos ser conservadores: Aporte segue a mesma proporção
+            
+            sims_risco = motor.monte_carlo_carteira(
+                retornos_diarios, 
+                sim_start_risco, 
+                sim_aporte * prop_risco, # Parte do aporte que vai para risco
+                10, 
+                1000
+            )
+            
+            # Projeta a Renda Fixa (Crescimento Determinístico ~10% a.a.)
+            meses = 120
+            # FV = PV * (1+i)^n + PMT * [...]
+            taxa_mensal_rf = 0.008 # 0.8% a.m. (~10% a.a.)
+            
+            # Saldo RF Futuro sem aportes
+            rf_futuro_base = sim_start_rf * ((1 + taxa_mensal_rf) ** meses)
+            
+            # Valor Futuro dos Aportes na RF
+            aporte_rf = sim_aporte * (1 - prop_risco)
+            rf_futuro_aportes = aporte_rf * (((1 + taxa_mensal_rf) ** meses - 1) / taxa_mensal_rf)
+            
+            rf_futuro_total = rf_futuro_base + rf_futuro_aportes
+            
+            # Soma tudo
+            sims_total = sims_risco + rf_futuro_total
+            
+            # Exibição
+            st.plotly_chart(go.Figure(go.Histogram(x=sims_total, nbinsx=50, marker_color='green')), use_container_width=True)
+            
+            p50 = np.median(sims_total)
+            p10 = np.percentile(sims_total, 10)
+            p90 = np.percentile(sims_total, 90)
+            
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Cenário Conservador (10%)", f"R$ {p10:,.2f}")
+            k2.metric("Cenário Provável (Mediana)", f"R$ {p50:,.2f}")
+            k3.metric("Cenário Otimista (90%)", f"R$ {p90:,.2f}")
+            
+            st.info(f"Nota: A simulação considerou {prop_risco*100:.1f}% em Renda Variável e {(1-prop_risco)*100:.1f}% em Renda Fixa, mantendo sua alocação atual.")
+            
+        except Exception as e: st.error(f"Erro na simulação: {e}")
+
+# --- ABA 6: FISCAL ---
 with tabs[5]:
     st.subheader("🦁 Calculadora de IR (DARF)")
-    st.info("Insira as vendas realizadas no mês para calcular o imposto.")
-    
-    # Template para input
     if "df_vendas" not in st.session_state:
         st.session_state.df_vendas = pd.DataFrame(columns=["Ticker", "Qtd", "Preço Venda", "PM"])
     
