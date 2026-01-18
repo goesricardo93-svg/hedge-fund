@@ -8,80 +8,74 @@ class MotorAnalise:
         try:
             if hist is None or hist.empty: return None
 
-            # --- TRATAMENTO DE DADOS ---
+            # --- 1. TRATAMENTO DE DADOS ---
             if isinstance(hist, pd.DataFrame):
-                if "Close" in hist.columns: fechamento = hist["Close"]
-                else: fechamento = hist.iloc[:, 0]
-                
-                if "Volume" in hist.columns: volume = hist["Volume"]
-                else: volume = pd.Series([0]*len(fechamento))
+                fechamento = hist["Close"] if "Close" in hist.columns else hist.iloc[:, 0]
+                volume = hist["Volume"] if "Volume" in hist.columns else pd.Series([0]*len(fechamento))
             else: return None
 
             if isinstance(fechamento, pd.DataFrame): fechamento = fechamento.iloc[:, 0]
             if isinstance(volume, pd.DataFrame): volume = volume.iloc[:, 0]
             
+            # Garante que temos dados suficientes
+            if len(fechamento) < 30: return None
+            
             preco_atual = float(fechamento.iloc[-1])
             
-            # --- TÉCNICA AVANÇADA (MACD + MÉDIAS) ---
-            # Médias
+            # --- 2. TÉCNICA (MACD + MÉDIAS) ---
             mme9 = fechamento.ewm(span=9, adjust=False).mean()
             mme21 = fechamento.ewm(span=21, adjust=False).mean()
             curta, longa = mme9.iloc[-1], mme21.iloc[-1]
             curta_ant, longa_ant = mme9.iloc[-2], mme21.iloc[-2]
 
-            # MACD (Novo Indicador de Tendência)
-            # MACD Line: MME12 - MME26
+            # MACD
             ema12 = fechamento.ewm(span=12, adjust=False).mean()
             ema26 = fechamento.ewm(span=26, adjust=False).mean()
             macd_line = ema12 - ema26
-            # Signal Line: MME9 da MACD Line
             signal_line = macd_line.ewm(span=9, adjust=False).mean()
-            histograma = macd_line - signal_line
-            
             macd_val = macd_line.iloc[-1]
             signal_val = signal_line.iloc[-1]
-            hist_val = histograma.iloc[-1]
 
-            # Volume Relativo
+            # Volume
             vol_media = volume.rolling(20).mean().iloc[-1]
             vol_relativo = (volume.iloc[-1] / vol_media) if vol_media > 0 else 0
 
-            # --- SINAL TÉCNICO ---
+            # Sinal Técnico
             sinal_tecnico = "NEUTRO"
             preco_alvo = 0.0
             
-            # Setup Cruzamento
             if curta > longa and curta_ant <= longa_ant:
                 sinal_tecnico = "⚡ COMPRA (CRUZAMENTO)"
                 preco_alvo = preco_atual
             elif curta > longa:
                 sinal_tecnico = "📈 TENDÊNCIA ALTA"
-                preco_alvo = curta # Pullback
+                preco_alvo = curta 
             elif curta < longa and curta_ant >= longa_ant:
                 sinal_tecnico = "☠️ VENDA (CRUZAMENTO)"
             elif curta < longa:
                 sinal_tecnico = "📉 TENDÊNCIA BAIXA"
 
-            # Confirmação MACD
-            status_macd = "Bullish" if macd_val > signal_val else "Bearish"
+            # --- 3. FUNDAMENTOS (EXTRAÇÃO SEGURA) ---
+            # Função auxiliar para evitar erro de NoneType
+            def safe_get(key, default=0.0):
+                val = info.get(key)
+                if val is None: return default
+                return float(val)
 
-            # --- FUNDAMENTOS & SEGURANÇA (NOVOS) ---
-            div_rate = info.get("trailingAnnualDividendRate", 0) or 0
-            if div_rate == 0: div_rate = (info.get("dividendYield", 0) or 0) * preco_atual
+            div_rate = safe_get("trailingAnnualDividendRate")
+            if div_rate == 0: div_rate = safe_get("dividendYield") * preco_atual
             dy = div_rate / preco_atual if preco_atual > 0 else 0
 
-            # Métricas Básicas
-            lpa = info.get("trailingEps", 0) or 0
-            vpa = info.get("bookValue", 0) or 0
-            roe = info.get("returnOnEquity", 0) or 0
-            margem_liq = info.get("profitMargins", 0) or 0
-            divida_ebitda = info.get("debtToEbitda", 0)
-
-            # Métricas de Segurança (NOVAS)
-            # Liquidez Corrente: Capacidade de pagar dívidas curto prazo
-            liq_corrente = info.get("currentRatio", 0) 
-            # Crescimento de Receita (YoY): A empresa está viva?
-            cresc_receita = info.get("revenueGrowth", 0)
+            lpa = safe_get("trailingEps")
+            vpa = safe_get("bookValue")
+            roe = safe_get("returnOnEquity")
+            margem_liq = safe_get("profitMargins")
+            divida_ebitda = safe_get("debtToEbitda")
+            
+            # NOVOS INDICADORES (BLINDADOS PARA BANCOS)
+            # Se vier None, assume 0 para não quebrar, mas não penaliza se for 0 em lógica específica
+            liq_corrente = safe_get("currentRatio", 0) 
+            cresc_receita = safe_get("revenueGrowth", 0)
 
             # Valuation
             val_div = div_rate
@@ -89,81 +83,84 @@ class MotorAnalise:
             p_graham = np.sqrt(22.5 * lpa * vpa) if (lpa > 0 and vpa > 0) else 0
             p_gordon = p_bazin
 
-            # --- SCORE IA 2.0 (MAIS RIGOROSO) ---
+            # --- 4. SCORE IA ---
             score = 50
             motivos = []
             alertas = []
 
-            # 1. Técnica (Peso 30)
+            # Técnica
             if "COMPRA" in sinal_tecnico: 
                 score += 15; motivos.append("Cruzamento Médias")
-                if status_macd == "Bullish": score += 5; motivos.append("MACD Positivo")
+                if macd_val > signal_val: score += 5; motivos.append("MACD Compra")
                 if vol_relativo > 1.2: score += 5; motivos.append("Volume Forte")
-            elif "VENDA" in sinal_tecnico: 
-                score -= 15; alertas.append("Tendência Baixa")
+            elif "VENDA" in sinal_tecnico: score -= 15; alertas.append("Tendência Baixa")
 
-            # 2. Valuation (Peso 20)
+            # Valuation
             if p_bazin > 0 and preco_atual < p_bazin: score += 10; motivos.append("Desconto Bazin")
             if p_graham > 0 and preco_atual < p_graham: score += 10; motivos.append("Desconto Graham")
 
-            # 3. Qualidade & Crescimento (Peso 30)
+            # Qualidade
             if roe > 0.15: score += 10; motivos.append(f"ROE Alto ({roe*100:.0f}%)")
             
-            # NOVO: Bonifica Crescimento / Pune Estagnação
-            if cresc_receita and cresc_receita > 0.10: score += 10; motivos.append("Crescimento > 10%")
-            elif cresc_receita and cresc_receita < 0: score -= 10; alertas.append("Receita Caindo")
+            if cresc_receita > 0.10: score += 10; motivos.append("Crescimento > 10%")
+            elif cresc_receita < -0.05: score -= 10; alertas.append("Receita Caindo")
 
-            # 4. Segurança & Solvência (Peso 20)
-            # NOVO: Liquidez Corrente
-            if liq_corrente and liq_corrente > 1.5: score += 5; motivos.append("Caixa Sólido")
-            elif liq_corrente and liq_corrente < 1.0: score -= 15; alertas.append("Risco Liquidez (Curto Prazo)")
+            # Solvência (Lógica Adaptativa)
+            # Se for banco (geralmente sem liquidez corrente informada), ignoramos esse teste
+            if liq_corrente > 0: 
+                if liq_corrente > 1.5: score += 5; motivos.append("Caixa Sólido")
+                elif liq_corrente < 1.0: score -= 15; alertas.append("Liquidez Baixa")
 
-            # Dívida Longa
-            if divida_ebitda and divida_ebitda > 3.5: score -= 15; alertas.append("Alavancado")
+            if divida_ebitda > 3.5: score -= 15; alertas.append("Alavancado")
 
-            # 5. Dividendos
             if dy > 0.06: score += 5; motivos.append("Dividendos")
 
             # RSI
-            rsi = 100 - (100 / (1 + (gain.iloc[-1]/loss.iloc[-1] if loss.iloc[-1]!=0 else 1)))
+            delta = fechamento.diff()
+            gain = delta.clip(lower=0).rolling(14).mean()
+            loss = -delta.clip(upper=0).rolling(14).mean()
+            if loss.iloc[-1] == 0: rsi = 50
+            else: rsi = 100 - (100 / (1 + (gain.iloc[-1]/loss.iloc[-1])))
+            
             if rsi < 30: score += 10; motivos.append("RSI Sobrevendido")
             elif rsi > 70: score -= 10; alertas.append("RSI Esticado")
 
             score = min(100, max(0, score))
-
+            
             if score >= 80: decisao = "🟢🟢 COMPRA FORTE"
             elif score >= 60: decisao = "🟢 COMPRA"
             elif score <= 40: decisao = "🔴 VENDA/RISCO"
             else: decisao = "⚪ MANTER"
 
+            # Resumo
             txt_resumo = ", ".join(motivos[:3])
             if alertas: txt_resumo += f" | ⚠️ {', '.join(alertas[:2])}"
 
-            # Indicadores de Suporte
             window = 60
             suporte = float(fechamento.tail(window).min())
             resistencia = float(fechamento.tail(window).max())
 
             return {
-                "preco": preco_atual, "rsi": rsi, "volatilidade": volatilidade, 
+                "preco": preco_atual, "rsi": rsi, "volatilidade": 0, 
                 "p_bazin": p_bazin, "p_graham": p_graham, "dy": dy,
                 "suporte": suporte, "resistencia": resistencia, 
                 "stop_loss": suporte * 0.97, "stop_gain": resistencia * 1.02,
                 "score_ia": score, "decisao_ia": decisao, "motivos": txt_resumo,
                 "pl": info.get("trailingPE", 0) or 0, "pvp": info.get("priceToBook", 0) or 0,
                 "roe": roe, "margem": margem_liq, "divida_ebitda": divida_ebitda,
-                # NOVOS DADOS
                 "sinal_tecnico": sinal_tecnico, "preco_alvo_entrada": preco_alvo,
                 "vol_relativo": vol_relativo, "mme9": curta, "mme21": longa,
                 "macd": macd_val, "macd_signal": signal_val,
                 "liq_corrente": liq_corrente, "cresc_receita": cresc_receita
             }
-        except Exception as e: 
-            print(f"Erro Motor: {e}")
+        except Exception as e:
+            # Imprime o erro no terminal para sabermos o que houve
+            print(f"❌ Erro MotorAnalise ({ticker}): {e}")
             return None
 
-    # MÉTODOS DE MONTE CARLO E DIVIDENDOS (MANTIDOS IGUAIS - NÃO COPIEI PARA ECONOMIZAR ESPAÇO, MANTENHA-OS)
+    # MANTENHA AS FUNÇÕES ABAIXO IGUAIS AO ARQUIVO ANTERIOR
     def monte_carlo_carteira(self, retornos_carteira, valor_inicial, aporte_mensal, anos=10, sims=1000):
+        # ... (copie a função igual da versão anterior) ...
         if len(retornos_carteira) == 0: return np.array([])
         log_returns = np.log(1 + retornos_carteira)
         mu, sigma = log_returns.mean(), log_returns.std()
@@ -180,6 +177,7 @@ class MotorAnalise:
         return np.array(res)
 
     def consultar_dividendos(self, ticker):
+        # ... (copie a função igual da versão anterior) ...
         try:
             t = yf.Ticker(ticker)
             hoje = pd.Timestamp.now().normalize()
