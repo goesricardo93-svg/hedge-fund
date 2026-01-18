@@ -1,100 +1,51 @@
 import pandas as pd
 import yfinance as yf
-import numpy as np
 
-# --- MODO 1: VIA ARQUIVO (MANTIDO) ---
+# MODO 1: CSV
 def scanner_fiis_csv(uploaded_file):
     try:
         df = pd.read_csv(uploaded_file, sep=';', encoding='latin-1', thousands='.', decimal=',')
         df.columns = [c.strip() for c in df.columns]
-        
-        # Filtros
-        df = df[df['Liquidez Media Diaria'] > 500000] 
-        df = df[(df['DY (12M) Media'] > 6.0) & (df['DY (12M) Media'] < 20.0)]
-        
-        cols = ['TICKER', 'PRECO', 'DY (12M) Media', 'P/VP', 'Liquidez Media Diaria', 'SEGMENTO']
-        final_cols = [c for c in cols if c in df.columns]
-        
-        return df[final_cols].sort_values(by='DY (12M) Media', ascending=False).head(20)
-    except Exception as e:
-        return pd.DataFrame([{"Erro": f"Falha no CSV: {str(e)}"}] )
+        cols = ['TICKER', 'PRECO', 'DY (12M) Media', 'P/VP', 'Liquidez Media Diaria']
+        final = [c for c in cols if c in df.columns]
+        return df[final].head(20)
+    except: return pd.DataFrame()
 
-# --- MODO 2: AUTOMÁTICO (CORREÇÃO DE P/VP) ---
+# MODO 2: AUTO
 def scanner_auto_yahoo():
-    try:
-        from motor import MotorAnalise
-    except ImportError:
-        return pd.DataFrame([{"Erro": "motor.py não encontrado."}])
-
+    try: from motor import MotorAnalise
+    except: return pd.DataFrame([{"Erro": "Motor não encontrado"}])
+    
     motor = MotorAnalise()
     
-    # Lista de FIIs Líquidos
-    tickers_alvo = [
+    # Lista Curta e Eficiente para Teste
+    tickers = [
         "MXRF11.SA", "HGLG11.SA", "XPML11.SA", "KNCR11.SA", "KNRI11.SA", 
-        "VISC11.SA", "HGBS11.SA", "CPTS11.SA", "HGRU11.SA", "BTLG11.SA",
-        "RECR11.SA", "IRDM11.SA", "ALZR11.SA", "JSRE11.SA", "VILG11.SA",
-        "TRXF11.SA", "HGRE11.SA", "XPLG11.SA", "MALL11.SA", "BRCO11.SA",
-        "LVBI11.SA", "PVBI11.SA", "RBRR11.SA", "TGAR11.SA", "KNSC11.SA",
-        "GGRC11.SA", "VGHF11.SA", "VGIR11.SA", "CVBI11.SA", "RBRF11.SA"
+        "VISC11.SA", "HGBS11.SA", "CPTS11.SA", "HGRU11.SA", "BTLG11.SA"
     ]
     
-    resultados = []
-    
-    for t in tickers_alvo:
+    res = []
+    for t in tickers:
         try:
-            obj = yf.Ticker(t)
-            # Tenta baixar histórico suficiente para o motor
-            hist = obj.history(period="2y")
-            info = obj.info
+            # Baixa só 6 meses para ser rápido
+            hist = yf.Ticker(t).history(period="6mo")
+            info = yf.Ticker(t).info
             
-            # Roda o Motor
-            analise = motor.analisar(hist, info, t)
+            an = motor.analisar(hist, info, t)
             
-            if analise:
-                # --- CORREÇÃO P/VP FORÇADA ---
-                # Se o motor devolveu 0 (porque o Yahoo falhou), tentamos recalcular aqui
-                pvp = analise.get('pvp', 0.0)
-                
-                if pvp == 0:
-                    # Tentativa 2: Cálculo Manual com dados brutos
-                    preco = analise['preco']
-                    vpa = info.get('bookValue')
-                    if vpa and vpa > 0:
-                        pvp = preco / vpa
-                    else:
-                        # Tentativa 3: Se não tem VPA, assume 1.0 (neutro) para não zerar score
-                        # ou deixa 0 para indicar falha de dado. Vamos deixar 0 mas avisar.
-                        pvp = 0.0
-
-                # Atualiza o P/VP dentro do dicionário de análise para o Score não quebrar
-                if pvp > 0: analise['pvp'] = pvp
-
-                # Filtro de Liquidez visual
-                if analise['liq_media'] > 300000:
-                    
-                    # Cálculo de Desconto IA
-                    p_justo = analise['preco_justo']
-                    desconto = 0.0
-                    if p_justo > 0:
-                        desconto = ((p_justo - analise['preco']) / p_justo) * 100
-                    
-                    resultados.append({
-                        "Ticker": t.replace(".SA", ""),
-                        "Setor": motor.identificar_setor(info, t).replace("FIIs-", ""),
-                        "Preço": analise['preco'],
-                        "Valor Justo": p_justo,
-                        "Upside (%)": desconto,
-                        "Score IA": analise['score_ia'],
-                        "DY Anual": analise['dy_anual'],
-                        "P/VP": pvp,
-                        "Tendência": analise['sinal_tecnico']
-                    })
+            if an:
+                res.append({
+                    "Ticker": t.replace(".SA", ""),
+                    "Score": an['score_ia'],
+                    "Preço": an['preco'],
+                    "Valor Justo": an['preco_justo'],
+                    "P/VP": an['pvp'],
+                    "DY %": an['dy_anual'],
+                    "Decisão": an['decisao_ia']
+                })
         except: continue
             
-    df = pd.DataFrame(resultados)
-    
+    df = pd.DataFrame(res)
     if not df.empty:
-        # Ordena por Score e depois por DY
-        df = df.sort_values(by=["Score IA", "DY Anual"], ascending=[False, False])
-        
+        df = df.sort_values(by="Score", ascending=False)
     return df
