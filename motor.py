@@ -4,45 +4,42 @@ import yfinance as yf
 
 class MotorAnalise:
     def identificar_setor(self, info, ticker):
-        """Mapeamento Setorial Completo (Inclui keywords específicas de FIIs)"""
+        """Mapeamento com keywords específicas para FIIs e Ações"""
         industry = (info.get('industry', '') or '').lower()
         summary = (info.get('longBusinessSummary', '') or '').lower()
         name = (info.get('longName', '') or '').lower()
 
-        # --- LÓGICA FIIs (CPSH11, XPML11, etc) ---
+        # FIIs
         if ticker.endswith('11.SA') and ticker not in ['IVVB11.SA', 'BOVA11.SA', 'XINA11.SA', 'BDRX19.SA']:
-            tijolo_kws = ['shopping', 'mall', 'logística', 'logistics', 'galpão', 'warehouse', 'laje', 'corporativo', 'urbana', 'renda urbana', 'hospital', 'imóveis', 'properties', 'real estate', 'predial']
+            tijolo_kws = ['shopping', 'mall', 'logística', 'logistics', 'galpão', 'warehouse', 'laje', 'corporativo', 'urbana', 'hospital', 'imóveis', 'properties', 'real estate', 'predial']
             if any(kw in industry or kw in summary or kw in name for kw in tijolo_kws):
                 return "FIIs-Tijolo"
             
-            papel_kws = ['recebíveis', 'cri', 'cra', 'papel', 'paper', 'debt', 'dívida', 'crédito', 'fund of funds', 'fof', 'títulos', 'financeiro']
+            papel_kws = ['recebíveis', 'cri', 'cra', 'papel', 'paper', 'debt', 'dívida', 'crédito', 'fund of funds', 'fof', 'títulos']
             if any(kw in industry or kw in summary or kw in name for kw in papel_kws):
                 return "FIIs-Papel"
             
             return "FIIs-Outros"
 
-        # --- LÓGICA AÇÕES & EXTERIOR ---
+        # Ações e Exterior
         if ticker in ['IVVB11.SA', 'BDRX19.SA'] or not ticker.endswith('.SA'): return "Exterior"
-
         if 'bank' in industry or 'financial' in industry: return "Ações-Bancos"
         if 'utilit' in industry or 'electric' in industry or 'water' in industry: return "Ações-Elétricas"
         if 'insur' in industry or 'segur' in industry: return "Ações-Seguridade"
         if 'mining' in industry or 'oil' in industry or 'gas' in industry or 'steel' in industry: return "Ações-Commodities"
-        
         return "Ações-Outros"
 
     def analisar(self, hist, info, ticker):
         try:
             if hist is None or hist.empty: return None
             
-            # Tratamento de dados
             fechamento = hist["Close"].iloc[:, 0] if isinstance(hist["Close"], pd.DataFrame) else hist["Close"]
             volume = hist["Volume"].iloc[:, 0] if isinstance(hist["Volume"], pd.DataFrame) else hist["Volume"]
             
             if len(fechamento) < 30: return None
             preco_atual = float(fechamento.iloc[-1])
 
-            # --- 1. MATEMÁTICA TÉCNICA (COMPLETA) ---
+            # --- 1. TÉCNICA (Completa) ---
             mme9 = fechamento.ewm(span=9, adjust=False).mean()
             mme21 = fechamento.ewm(span=21, adjust=False).mean()
             
@@ -52,7 +49,7 @@ class MotorAnalise:
             macd_line = ema12 - ema26
             signal_line = macd_line.ewm(span=9, adjust=False).mean()
             
-            # RSI (14)
+            # RSI
             delta = fechamento.diff()
             gain = delta.clip(lower=0).rolling(14).mean()
             loss = -delta.clip(upper=0).rolling(14).mean()
@@ -60,11 +57,11 @@ class MotorAnalise:
             rsi_series = 100 - (100 / (1 + rs))
             rsi = rsi_series.iloc[-1] if not np.isnan(rsi_series.iloc[-1]) else 50
 
-            # Volatilidade Anualizada
+            # Volatilidade
             retornos = fechamento.pct_change().dropna()
             volatilidade = retornos.std() * (252 ** 0.5) if not retornos.empty else 0.0
 
-            # --- 2. DIVIDENDOS (CÁLCULO REAL) ---
+            # --- 2. DIVIDENDOS (Cálculo Real para evitar KeyError) ---
             try:
                 t = yf.Ticker(ticker)
                 divs = t.dividends
@@ -79,7 +76,7 @@ class MotorAnalise:
                 dy_mensal = 0.0
                 dy_anual = (info.get('dividendYield') or 0.0) * 100
 
-            # --- 3. FUNDAMENTOS & VALUATION ---
+            # --- 3. VALUATION ---
             def safe_get(key, default=0.0):
                 val = info.get(key)
                 return float(val) if val is not None else default
@@ -92,7 +89,7 @@ class MotorAnalise:
             p_graham = np.sqrt(22.5 * lpa * vpa) if (lpa > 0 and vpa > 0) else 0
             p_gordon = p_bazin 
 
-            # --- 4. SCORE IA & TRAVAS DE RISCO (COMPLETO) ---
+            # --- 4. SCORE & RISCO ---
             score = 50
             motivos = []
             alertas = []
@@ -100,39 +97,28 @@ class MotorAnalise:
             setor_ativo = self.identificar_setor(info, ticker)
             is_fii = "FII" in setor_ativo
 
-            # A) Trava de Liquidez
+            # Travas de Risco
             vol_fin_medio = (fechamento * volume).tail(21).mean()
             limite_liq = 500000 if is_fii else 1000000
             if vol_fin_medio < limite_liq:
                 score -= 20
                 alertas.append(f"Baixa Liquidez (R${vol_fin_medio/1000:.0f}k)")
             
-            # B) Trava de Payout
             payout = safe_get("payoutRatio")
             limite_payout = 1.2 if is_fii else 1.0 
             if payout > limite_payout:
                 score -= 15
                 alertas.append(f"Payout Alto ({payout*100:.0f}%)")
 
-            # C) Trava de Ágio FII
             pvp = safe_get("priceToBook")
             if is_fii and pvp > 0:
-                if pvp > 1.05:
-                    score -= 10
-                    alertas.append(f"FII Caro (P/VP {pvp:.2f})")
-                if "Papel" in setor_ativo and pvp > 1.02:
-                    score = 0
-                    alertas.append("⛔ ÁGIO EM PAPEL")
+                if pvp > 1.05: score -= 10; alertas.append(f"FII Caro (P/VP {pvp:.2f})")
+                if "Papel" in setor_ativo and pvp > 1.02: score = 0; alertas.append("⛔ ÁGIO EM PAPEL")
 
-            # Bonificações Técnicas
-            curr_mme9 = mme9.iloc[-1]
-            curr_mme21 = mme21.iloc[-1]
-            if curr_mme9 > curr_mme21: score += 15; motivos.append("Tendência Alta")
+            # Pontuação
+            if mme9.iloc[-1] > mme21.iloc[-1]: score += 15; motivos.append("Tendência Alta")
             else: score -= 15
-
             if macd_line.iloc[-1] > signal_line.iloc[-1]: score += 5; motivos.append("MACD Compra")
-
-            # Bonificações Fundamentos
             if p_bazin > 0 and preco_atual < p_bazin: score += 10; motivos.append("Desc. Bazin")
             if dy_anual > 6.0: score += 10; motivos.append(f"DY {dy_anual:.1f}%")
             if rsi < 30: score += 10; motivos.append("RSI Sobrevendido")
@@ -144,7 +130,6 @@ class MotorAnalise:
             texto_final = ", ".join(motivos)
             if alertas: texto_final += " | ⚠️ " + ", ".join(alertas)
 
-            # Suportes e Resistências
             suporte = float(fechamento.tail(60).min())
             resistencia = float(fechamento.tail(60).max())
 
@@ -155,48 +140,32 @@ class MotorAnalise:
                 "motivos": texto_final,
                 "p_bazin": p_bazin, "p_graham": p_graham, "p_gordon": p_gordon,
                 "dy_mensal": dy_mensal, "dy_anual": dy_anual,
-                "mme9": curr_mme9, "mme21": curr_mme21,
+                "mme9": mme9.iloc[-1], "mme21": mme21.iloc[-1],
                 "macd": macd_line.iloc[-1], "macd_signal": signal_line.iloc[-1],
                 "rsi": rsi, "volatilidade": volatilidade,
                 "stop_loss": suporte * 0.97, "stop_gain": resistencia * 1.02,
-                "sinal_tecnico": "ALTA" if curr_mme9 > curr_mme21 else "BAIXA",
-                "liq_media": vol_fin_medio, "pvp": pvp, "preco_alvo_entrada": curr_mme9,
-                "vol_relativo": (volume.iloc[-1] / volume.rolling(20).mean().iloc[-1]) if volume.iloc[-1] > 0 else 0
+                "sinal_tecnico": "ALTA" if mme9.iloc[-1] > mme21.iloc[-1] else "BAIXA",
+                "liq_media": vol_fin_medio, "pvp": pvp
             }
         except Exception as e:
-            print(f"Erro Motor: {e}")
             return None
 
     def monte_carlo_carteira(self, retornos, val_ini, aporte, anos=10, sims=1000):
-        """Simulação Monte Carlo Real (NumPy)"""
         if len(retornos) == 0: return np.array([])
         log_returns = np.log(1 + retornos)
         mu, sigma = log_returns.mean(), log_returns.std()
+        drift = mu - (0.5 * sigma**2)
         days = anos * 252
         simulacoes = []
-        drift = mu - (0.5 * sigma**2)
         for _ in range(sims):
             shocks = drift + sigma * np.random.normal(0, 1, days)
-            caminho_diario = np.exp(shocks)
             saldo = val_ini
-            for dia, retorno in enumerate(caminho_diario):
-                saldo = saldo * retorno
-                if (dia + 1) % 21 == 0: saldo += aporte
+            path = np.exp(shocks)
+            for d, ret in enumerate(path):
+                saldo *= ret
+                if (d+1)%21 == 0: saldo += aporte
             simulacoes.append(saldo)
         return np.array(simulacoes)
-
+    
     def consultar_dividendos(self, ticker):
-        try:
-            t = yf.Ticker(ticker)
-            cal = t.calendar
-            res = {"status": "NEUTRO", "ultimo_data": "-", "ultimo_valor": "-"}
-            divs = t.dividends
-            if not divs.empty:
-                res["ultimo_data"] = divs.index[-1].strftime('%d/%m/%Y')
-                res["ultimo_valor"] = f"R$ {float(divs.iloc[-1]):.2f}"
-            if isinstance(cal, dict) and ('Dividend Date' in cal or 'Ex-Dividend Date' in cal):
-                dt = cal.get('Dividend Date') or cal.get('Ex-Dividend Date')
-                res["proximo_data"] = str(dt)
-                res["status"] = "AGENDA"
-            return res
-        except: return {"status": "ERRO"}
+        return {"status": "NEUTRO"}
