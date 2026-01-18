@@ -4,7 +4,7 @@ import yfinance as yf
 
 class MotorAnalise:
     def identificar_setor(self, info, ticker):
-        # LISTA VIP (Garante acerto)
+        # LISTA VIP
         TIJOLO_VIP = ['XPML11.SA', 'VISC11.SA', 'MALL11.SA', 'HGBS11.SA', 'CPSH11.SA', 'HGLG11.SA', 'BTLG11.SA', 'XPLG11.SA', 'VILG11.SA', 'LVBI11.SA', 'HGRU11.SA', 'KNRI11.SA', 'HGRE11.SA', 'JSRE11.SA', 'BRCO11.SA', 'TRXF11.SA', 'ALZR11.SA', 'GGRC11.SA']
         PAPEL_VIP = ['MXRF11.SA', 'KNCR11.SA', 'CPTS11.SA', 'RECR11.SA', 'IRDM11.SA', 'KNIP11.SA', 'HGCR11.SA', 'VGIR11.SA', 'CVBI11.SA', 'KNSC11.SA']
         
@@ -43,7 +43,7 @@ class MotorAnalise:
             if len(fechamento) < 30: return None
             preco_atual = float(fechamento.iloc[-1])
 
-            # --- 1. TÉCNICA (ALGO-TRADING) ---
+            # --- 1. TÉCNICA ---
             mme9 = fechamento.ewm(span=9, adjust=False).mean()
             mme21 = fechamento.ewm(span=21, adjust=False).mean()
             
@@ -70,7 +70,7 @@ class MotorAnalise:
             stop_loss = suporte * 0.97
             stop_gain = resistencia * 1.02
 
-            # --- 2. DIVIDENDOS (REAL) ---
+            # --- 2. DIVIDENDOS ---
             try:
                 t = yf.Ticker(ticker); divs = t.dividends
                 if not divs.empty:
@@ -81,10 +81,19 @@ class MotorAnalise:
                 else: dy_mensal, dy_anual = 0.0, 0.0
             except: dy_mensal, dy_anual = 0.0, (info.get('dividendYield') or 0.0) * 100
 
-            # --- 3. VALUATION ---
-            def safe_get(key, default=0.0): return float(info.get(key) or default)
+            # --- 3. VALUATION & P/VP CORRIGIDO ---
+            def safe_get(key, default=0.0): 
+                val = info.get(key)
+                return float(val) if val is not None else default
+
             lpa = safe_get("trailingEps")
-            vpa = safe_get("bookValue")
+            vpa = safe_get("bookValue") # Valor Patrimonial por Ação/Cota
+            
+            # Tenta pegar P/VP pronto. Se vier zerado, calcula na mão: Preço / VPA
+            pvp = safe_get("priceToBook")
+            if pvp == 0 and vpa > 0:
+                pvp = preco_atual / vpa
+
             div_reais = (dy_anual / 100) * preco_atual
             
             p_bazin = div_reais / 0.06 if div_reais > 0 else 0
@@ -94,93 +103,73 @@ class MotorAnalise:
             setor_ativo = self.identificar_setor(info, ticker)
             is_fii = "FII" in setor_ativo
 
-            # ROBÔ DE PREÇO JUSTO E ALVO
+            # ROBÔ DE PREÇO JUSTO
             if is_fii:
-                preco_justo = p_bazin # FII respeita Bazin
+                # FIIs: Se tiver VPA confiável, usa VPA como referência secundária, mas Bazin domina
+                # Aqui usamos Bazin como teto de renda
+                preco_justo = p_bazin 
             else:
                 validos = [x for x in [p_bazin, p_graham] if x > 0]
                 preco_justo = sum(validos) / len(validos) if validos else 0
 
-            # --- 4. DUAL SCORE (AQUI VOLTA A LÓGICA V50.1) ---
+            # --- 4. SCORE ---
             score = 50
             motivos = []
             alertas = []
             
-            # Dados fundamentais comuns
-            pvp = safe_get("priceToBook")
             payout = safe_get("payoutRatio")
             vol_fin_medio = (fechamento * volume).tail(21).mean()
 
-            # ========================================================
-            # MOTOR 1: FIIs (Foco: Estabilidade, Renda e Segurança)
-            # ========================================================
+            # --- LÓGICA FIIs ---
             if is_fii:
                 limite_liq = 300000 
-                
-                # A. Liquidez (Eliminatória)
                 if vol_fin_medio < limite_liq: 
                     score -= 30; alertas.append(f"Baixa Liquidez ({vol_fin_medio/1000:.0f}k)")
 
-                # B. P/VP (O Rei dos FIIs)
+                # P/VP (Agora usando o valor corrigido)
                 if pvp > 0:
-                    if 0.90 <= pvp <= 1.05: 
-                        score += 20; motivos.append(f"P/VP Atrativo ({pvp:.2f})")
-                    elif pvp > 1.10: 
+                    if 0.85 <= pvp <= 1.05: 
+                        score += 20; motivos.append(f"P/VP Justo ({pvp:.2f})")
+                    elif pvp > 1.15: 
                         score -= 15; alertas.append(f"FII Caro (P/VP {pvp:.2f})")
-                    elif pvp < 0.80: 
-                        score -= 10; alertas.append(f"Desconto Excessivo/Risco ({pvp:.2f})")
+                    elif pvp < 0.75: 
+                        score -= 5; motivos.append(f"Desconto Alto ({pvp:.2f})") # Pode ser oportunidade ou risco
                     
-                    # Trava de Ágio em Papel (Regra de Ouro)
-                    if "Papel" in setor_ativo and pvp > 1.03: 
+                    # Trava de Ágio Papel
+                    if "Papel" in setor_ativo and pvp > 1.05: 
                         score = 0; alertas.append("⛔ ÁGIO EM PAPEL")
 
-                # C. Dividend Yield (O Objetivo)
                 if dy_anual > 9.0: score += 20; motivos.append(f"DY Alto {dy_anual:.1f}%")
-                elif dy_anual > 6.0: score += 10; motivos.append("DY OK")
-                else: score -= 10; alertas.append(f"DY Baixo {dy_anual:.1f}%")
+                elif dy_anual > 6.0: score += 10
+                else: score -= 10
 
-                # D. Volatilidade (FII bom é FII chato)
                 if volatilidade < 0.15: score += 10; motivos.append("Baixa Volatilidade")
-                elif volatilidade > 0.30: score -= 10; alertas.append("Alta Volatilidade")
+                elif volatilidade > 0.30: score -= 10
 
-                # E. Tendência (Suave)
-                if mme9.iloc[-1] > mme21.iloc[-1]: score += 5 # Peso menor que ações
+                if mme9.iloc[-1] > mme21.iloc[-1]: score += 5
                 
-            # ========================================================
-            # MOTOR 2: AÇÕES (Foco: Crescimento, Momento e Valor)
-            # ========================================================
+            # --- LÓGICA AÇÕES ---
             else: 
                 limite_liq = 1000000
                 if vol_fin_medio < limite_liq: score -= 20; alertas.append("Baixa Liquidez")
 
-                # A. Tendência (Trade Follower)
-                if mme9.iloc[-1] > mme21.iloc[-1]: 
-                    score += 20; motivos.append("Tendência Alta (9x21)")
-                else: 
-                    score -= 15; alertas.append("Tendência Baixa")
+                if mme9.iloc[-1] > mme21.iloc[-1]: score += 20; motivos.append("Tendência Alta")
+                else: score -= 15
 
-                # B. MACD (Momento)
-                if macd_line.iloc[-1] > signal_line.iloc[-1]: 
-                    score += 10; motivos.append("MACD Compra")
-
-                # C. Volume (Interesse Institucional)
+                if macd_line.iloc[-1] > signal_line.iloc[-1]: score += 10; motivos.append("MACD Compra")
                 if vol_relativo > 1.3: score += 5; motivos.append("Volume Forte")
 
-                # D. Valuation (Desconto)
                 if preco_justo > 0:
                     upside = (preco_justo - preco_atual) / preco_atual
                     if upside > 0.20: score += 15; motivos.append(f"Upside +{upside*100:.0f}%")
                     elif upside < 0: score -= 10
 
-                # E. RSI (Sobrevendido)
                 if rsi < 30: score += 10; motivos.append("RSI Sobrevendido")
-                elif rsi > 75: score -= 10; alertas.append("RSI Esticado")
+                elif rsi > 75: score -= 10
 
-            # --- FECHAMENTO DO SCORE ---
             score = min(100, max(0, score))
             if "⛔ ÁGIO EM PAPEL" in alertas: score = 0
 
-            # Cálculos Técnicos Finais
             tendencia = "ALTA" if mme9.iloc[-1] > mme21.iloc[-1] else "BAIXA"
             status_macd = "COMPRA" if macd_line.iloc[-1] > signal_line.iloc[-1] else "VENDA"
 
