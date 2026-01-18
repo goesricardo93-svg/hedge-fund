@@ -21,13 +21,13 @@ except ImportError as e:
     st.error(f"Erro Crítico: {e}")
     st.stop()
 
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 52.0 (Estratégia Fina)", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 53.0 (Anti-Crash)", layout="wide")
 
 # ======================================================
 # 2. CACHE E FUNÇÕES
 # ======================================================
 @st.cache_data(ttl=3600)
-def obter_dados_v52(ticker): 
+def obter_dados_v53(ticker): 
     try:
         t = yf.Ticker(ticker)
         hist = t.history(period="2y")
@@ -78,10 +78,10 @@ def renderizar_tradingview_widget(ticker):
     components.html(html_code, height=500)
 
 # ======================================================
-# 3. ESTADO DA SESSÃO (COM EXEMPLOS CLASSIFICADOS)
+# 3. ESTADO DA SESSÃO (COM AUTOCORREÇÃO)
 # ======================================================
+# Inicialização Padrão
 if "carteira_acoes" not in st.session_state:
-    # Dados de exemplo já classificados na sua nova estratégia
     dados = [
         ["BBAS3.SA", 1703, 24.48, "Ações-Bancos"], 
         ["ITSA4.SA", 1174, 9.63,  "Ações-Bancos"],
@@ -95,6 +95,13 @@ if "carteira_acoes" not in st.session_state:
         ["HGLG11.SA", 20, 158.03, "FIIs-Tijolo"]
     ]
     st.session_state.carteira_acoes = pd.DataFrame(dados, columns=["Ticker", "Qtd", "PM", "Setor"])
+
+# --- AUTOCORREÇÃO DE COLUNAS (CORREÇÃO DO ERRO KEYERROR) ---
+# Se a carteira existe mas falta a coluna "Setor" (cache antigo), criamos ela agora.
+if "Setor" not in st.session_state.carteira_acoes.columns:
+    st.session_state.carteira_acoes["Setor"] = "Ações-Outros"
+    st.toast("Sistema atualizou a estrutura da tabela automaticamente.", icon="🛠️")
+# -----------------------------------------------------------
 
 if "carteira_rf" not in st.session_state:
     st.session_state.carteira_rf = pd.DataFrame([
@@ -117,7 +124,7 @@ if (hoje.day == 1 or forcar_envio) and f"report_{mes_str}" not in st.session_sta
         try:
             res_auto = []
             for _, row in st.session_state.carteira_acoes.iterrows():
-                r = obter_dados_v52(row["Ticker"])
+                r = obter_dados_v53(row["Ticker"])
                 if r:
                     res_auto.append({
                         "Ticker": row["Ticker"], "Preço": r["preco"], "PM": row["PM"],
@@ -154,7 +161,7 @@ tabs = st.tabs(["🔎 Análise", "💼 Carteira", "🏢 FIIs 360", "🛡️ RF &
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
     motor = MotorAnalise()
-    r = obter_dados_v52(ticker_input)
+    r = obter_dados_v53(ticker_input)
     
     if r:
         div_info = motor.consultar_dividendos(ticker_input)
@@ -268,7 +275,7 @@ with tabs[1]:
             "FIIs-Outros": m_fii_outros
         }
     
-    # --- EDITOR COM NOVAS CATEGORIAS ---
+    # --- EDITOR DE DADOS ---
     st.write("Classifique seus ativos conforme sua estratégia:")
     df_ed = st.data_editor(
         st.session_state.carteira_acoes,
@@ -297,9 +304,7 @@ with tabs[1]:
             total = len(df_ed)
             
             for i, row in df_ed.iterrows():
-                # Ignora RF aqui, pois tratamos separado ou via manual, 
-                # mas se o usuário colocar um ETF de RF aqui, o sistema processa.
-                r = obter_dados_v52(row["Ticker"])
+                r = obter_dados_v53(row["Ticker"])
                 if r:
                     rec = r['decisao_ia']
                     if "COMPRA" in r['sinal_tecnico']: rec = f"🔥 {r['sinal_tecnico']}"
@@ -308,7 +313,12 @@ with tabs[1]:
                     if r['score_ia'] >= 80 and row["Ticker"] not in st.session_state.alertas_enviados:
                         st.session_state.alertas_enviados.add(row["Ticker"])
                     
-                    setor_ativo = row["Setor"] if row["Setor"] else "Ações-Outros"
+                    # CORREÇÃO CRÍTICA AQUI: Uso seguro do .get para evitar crash
+                    # Se "Setor" não existir na linha (cache velho), usa padrão.
+                    try:
+                        setor_ativo = row["Setor"] if row["Setor"] else "Ações-Outros"
+                    except:
+                        setor_ativo = "Ações-Outros"
                     
                     res.append({
                         "Ticker": row["Ticker"], "Preço": r["preco"], "PM": row["PM"],
@@ -323,7 +333,7 @@ with tabs[1]:
                 df_res = pd.DataFrame(res)
                 st.session_state.df_analisado = df_res 
                 
-                # REBALANCEAMENTO COM AS NOVAS METAS DETALHADAS
+                # REBALANCEAMENTO
                 df_final = rebalancear_e_aportar(df_res, aporte_user, metas_setores=metas)
                 st.session_state.df_final = df_final
                 
