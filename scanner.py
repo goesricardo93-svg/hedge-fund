@@ -1,81 +1,64 @@
 import pandas as pd
+import yfinance as yf
+import io
 
+# --- MODO 1: VIA ARQUIVO (PRECISÃO MÁXIMA) ---
 def scanner_fiis_csv(uploaded_file):
     try:
-        df = pd.read_csv(uploaded_file, sep=";", encoding="latin-1")
+        df = pd.read_csv(uploaded_file, sep=';', encoding='latin-1', thousands='.', decimal=',')
+        df.columns = [c.strip() for c in df.columns]
         
-        def limpar_numero(x):
-            if isinstance(x, str):
-                x = x.replace('%', '').replace('.', '').replace(',', '.')
-                try: return float(x)
-                except: return 0.0
-            return x
-
-        mapa = {c.upper().strip(): c for c in df.columns}
+        # Filtros Private Bank
+        df = df[df['Liquidez Media Diaria'] > 500000] # Liquidez
+        df = df[(df['DY (12M) Media'] > 6.0) & (df['DY (12M) Media'] < 18.0)] # DY Saudável
+        df = df[(df['P/VP'] > 0.80) & (df['P/VP'] < 1.15)] # Preço Justo
         
-        col_dy = mapa.get("DY") or mapa.get("DIVIDEND YIELD")
-        col_pvp = mapa.get("P/VP")
-        col_vac = mapa.get("VACANCIA FISICA") or mapa.get("VACÂNCIA FÍSICA")
-        col_liq = mapa.get("LIQUIDEZ MEDIA DIARIA")
-        col_ticker = mapa.get("TICKER") or mapa.get("ATIVO")
-        col_preco = mapa.get("PRECO") or mapa.get("PREÇO") or mapa.get("COTACAO")
-        col_seg = mapa.get("SEGMENTO") or mapa.get("SETOR")
+        if 'Vacancia Financeira' in df.columns:
+            df = df[df['Vacancia Financeira'] < 10.0]
 
-        if not (col_dy and col_pvp and col_ticker): return pd.DataFrame()
-
-        df["DY_N"] = df[col_dy].apply(limpar_numero)
-        df["PVP_N"] = df[col_pvp].apply(limpar_numero)
-        df["VAC_N"] = df[col_vac].apply(limpar_numero) if col_vac else 0
-        df["LIQ_N"] = df[col_liq].apply(limpar_numero) if col_liq else 0
-        df["SEGMENTO_N"] = df[col_seg].astype(str).str.upper().fillna("OUTROS") if col_seg else "OUTROS"
-
-        # --- CLASSIFICAÇÃO INTELIGENTE ---
-        def classificar_segmento(s):
-            if any(x in s for x in ["PAPEL", "RECEB", "CRI", "CRA", "TÍTULO", "TITULO", "VAL. MOB", "FINANCEIRO"]): return "PAPEL"
-            if any(x in s for x in ["TIJOLO", "LAJE", "LOG", "SHOP", "VAR", "HIBRIDO", "HÍBRIDO", "INDUSTRIAL", "EDUCACIONAL", "HOSPITAL"]): return "TIJOLO"
-            if any(x in s for x in ["AGRO", "RURAL", "TERRA", "FIAGRO"]): return "AGRO"
-            return "OUTROS"
-
-        df["CATEGORIA"] = df["SEGMENTO_N"].apply(classificar_segmento)
-
-        # --- SCORE RIGOROSO (Evita notas 100 excessivas) ---
-        def analisar_fii(row):
-            score = 50 
-            motivos = []
-            
-            # DY
-            if row["DY_N"] > 14: score += 5; motivos.append("DY Explosivo (Risco?)")
-            elif row["DY_N"] > 9: score += 20; motivos.append("DY Alto")
-            elif row["DY_N"] < 6: score -= 15; motivos.append("DY Baixo")
-
-            # P/VP
-            if 0.85 <= row["PVP_N"] <= 1.05: score += 20; motivos.append("Preço Justo")
-            elif row["PVP_N"] < 0.80: score += 15; motivos.append("Desconto Patrimonial") 
-            elif row["PVP_N"] > 1.15: score -= 20; motivos.append("Caro (Ágio)")
-
-            # Vacância (Só penaliza tijolo)
-            if row["CATEGORIA"] == "TIJOLO":
-                if row["VAC_N"] > 15: score -= 30; motivos.append("Vacância Alta")
-                elif row["VAC_N"] < 5: score += 10; motivos.append("Ocupação Alta")
-
-            # Liquidez
-            if row["LIQ_N"] < 200000: score -= 10; motivos.append("Baixa Liquidez")
-            
-            score = min(100, max(0, score))
-            
-            if score >= 75: veredito = "🔥 COMPRA FORTE"
-            elif score >= 60: veredito = "🟢 COMPRA"
-            elif score <= 40: veredito = "🔴 EVITAR"
-            else: veredito = "⚪ MANTER"
-
-            return pd.Series([score, ", ".join(motivos), veredito])
-
-        df[["Score", "Motivos (IA)", "Veredito"]] = df.apply(analisar_fii, axis=1)
+        cols = ['TICKER', 'PRECO', 'DY (12M) Media', 'P/VP', 'Liquidez Media Diaria', 'SEGMENTO']
+        final_cols = [c for c in cols if c in df.columns]
         
-        cols_final = [col_ticker, "CATEGORIA", col_preco, col_dy, col_pvp, "Score", "Veredito", "Motivos (IA)"]
-        if col_vac: cols_final.append(col_vac)
-        
-        return df[cols_final].sort_values("Score", ascending=False)
+        return df[final_cols].sort_values(by='DY (12M) Media', ascending=False).head(20)
+    except Exception as e:
+        return pd.DataFrame([{"Erro": f"Falha no CSV: {str(e)}"}] )
+
+# --- MODO 2: AUTOMÁTICO (YAHOO FINANCE) ---
+def scanner_auto_yahoo():
+    # Lista dos principais FIIs do IFIX para varrer
+    tickers_alvo = [
+        "MXRF11.SA", "HGLG11.SA", "XPML11.SA", "KNCR11.SA", "KNRI11.SA", 
+        "VISC11.SA", "HGBS11.SA", "CPTS11.SA", "HGRU11.SA", "BTLG11.SA",
+        "RECR11.SA", "IRDM11.SA", "ALZR11.SA", "JSRE11.SA", "VILG11.SA",
+        "TRXF11.SA", "HGRE11.SA", "XPLG11.SA", "MALL11.SA", "BRCO11.SA",
+        "LVBI11.SA", "PVBI11.SA", "RBRR11.SA", "TGAR11.SA", "KNSC11.SA"
+    ]
+    
+    resultados = []
+    
+    # Download em lote é mais rápido
+    dados = yf.download(tickers_alvo, period="1mo", progress=False)['Close']
+    
+    for t in tickers_alvo:
+        try:
+            ticker_obj = yf.Ticker(t)
+            info = ticker_obj.info
             
-    except:
-        return pd.DataFrame()
+            preco = dados[t].iloc[-1]
+            dy_anual = (info.get('dividendYield', 0) or 0) * 100
+            
+            # Filtro Básico (O Yahoo falha no P/VP, então filtramos por DY)
+            if dy_anual > 6.0 and dy_anual < 20.0:
+                resultados.append({
+                    "Ticker": t.replace(".SA", ""),
+                    "Preço": f"R$ {preco:.2f}",
+                    "DY (Estimado)": f"{dy_anual:.2f}%",
+                    "Setor": info.get('industry', 'N/A')
+                })
+        except: continue
+            
+    df = pd.DataFrame(resultados)
+    if not df.empty:
+        df = df.sort_values(by="DY (Estimado)", ascending=False)
+    
+    return df
