@@ -143,19 +143,50 @@ with tabs[1]:
             final = rebalancear_e_aportar(pd.DataFrame(dados), aporte, d_metas)
             st.dataframe(final[final["Aporte Sugerido (R$)"]>1].style.format({"Aporte Sugerido (R$)": "R$ {:.2f}"}), use_container_width=True)
 
-# ABA 3: SCANNER
+# ======================================================
+# ABA 3: SCANNER HÍBRIDO (ATUALIZADA)
+# ======================================================
 with tabs[2]:
-    st.subheader("🏢 FIIs 360")
-    modo = st.radio("Modo", ["🤖 Automático (Yahoo)", "📂 CSV (StatusInvest)"], horizontal=True)
-    if "Auto" in modo:
-        if st.button("🚀 Varrer Mercado"):
-            if scanner_auto_yahoo: 
-                with st.spinner("Analisando mercado..."):
-                    st.dataframe(scanner_auto_yahoo(), use_container_width=True)
-            else: st.error("Erro: arquivo scanner.py antigo.")
+    st.subheader("🏢 Scanner FIIs 360 (Análise Completa)")
+    
+    modo_scan = st.radio("Fonte de Dados:", 
+                         ["🤖 Modo Automático (Yahoo - Análise IA)", "📂 Modo Planilha (CSV StatusInvest)"], 
+                         horizontal=True)
+    
+    if "Automático" in modo_scan:
+        st.info("Este modo executa o Motor de IA em tempo real para os 30 principais FIIs. Pode levar alguns segundos.")
+        
+        if st.button("🚀 Rodar Análise 360"):
+            if scanner_auto_yahoo:
+                with st.spinner("O Robô está analisando tecnicamente e fundamentalmente cada ativo..."):
+                    df_auto = scanner_auto_yahoo()
+                    
+                    if not df_auto.empty and "Score IA" in df_auto.columns:
+                        st.dataframe(
+                            df_auto,
+                            use_container_width=True,
+                            column_config={
+                                "Ticker": st.column_config.TextColumn("Ativo"),
+                                "Preço": st.column_config.NumberColumn("Preço", format="R$ %.2f"),
+                                "Valor Justo": st.column_config.NumberColumn("Preço Justo (IA)", format="R$ %.2f"),
+                                "Desconto (%)": st.column_config.NumberColumn("Upside", format="%.1f%%"),
+                                "Score IA": st.column_config.ProgressColumn("Score", min_value=0, max_value=100, format="%d"),
+                                "DY Anual": st.column_config.NumberColumn("DY (12m)", format="%.2f%%"),
+                                "P/VP": st.column_config.NumberColumn("P/VP", format="%.2f"),
+                            },
+                            hide_index=True
+                        )
+                    else:
+                        st.dataframe(df_auto) # Mostra erro ou tabela simples se falhar
+            else:
+                st.error("Erro: arquivo scanner.py antigo ou função não encontrada.")
+    
     else:
-        up = st.file_uploader("CSV", type=["csv"])
-        if up and scanner_fiis_csv: st.dataframe(scanner_fiis_csv(up))
+        st.info("Faça o upload do CSV da 'Busca Avançada' do StatusInvest para analisar Vacância Física e dados oficiais.")
+        uploaded_file = st.file_uploader("Arraste o arquivo aqui (.csv)", type=["csv"])
+        if uploaded_file and scanner_fiis_csv:
+            df_csv = scanner_fiis_csv(uploaded_file)
+            st.dataframe(df_csv, use_container_width=True)
 
 # ABA 7: OPÇÕES (COMPLETA)
 with tabs[6]:
