@@ -4,7 +4,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-# --- 1. IMPORTAÇÃO SEGURA ---
+# --- 1. IMPORTAÇÃO ---
 try:
     from motor import MotorAnalise
     from rebalance import rebalancear_e_aportar
@@ -17,10 +17,10 @@ try:
     try: from options import BlackScholes
     except: BlackScholes = None
 except ImportError as e:
-    st.error(f"Erro crítico: {e}. Verifique se todos os arquivos estão na pasta.")
+    st.error(f"Erro crítico: {e}. Verifique os arquivos na pasta.")
     st.stop()
 
-st.set_page_config(page_title="Hedge Fund Ricardo v71.0", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo v72", layout="wide")
 
 # --- 2. CACHE ---
 @st.cache_data(ttl=3600)
@@ -66,7 +66,9 @@ if "carteira_rf" not in st.session_state:
 # --- 4. UI ---
 st.title("💰 Hedge Fund Ricardo")
 with st.sidebar:
-    if st.button("🧹 Limpar Cache"): st.cache_data.clear(); st.rerun()
+    if st.button("🧹 Limpar Cache (Correção)"): 
+        st.cache_data.clear()
+        st.rerun()
     st.divider()
     if gerar_pdf_carteira:
         if st.button("📄 Gerar Relatório PDF"):
@@ -147,15 +149,17 @@ with tabs[2]:
     modo = st.radio("Modo", ["🤖 Automático (Yahoo)", "📂 CSV (StatusInvest)"], horizontal=True)
     if "Auto" in modo:
         if st.button("🚀 Varrer Mercado"):
-            if scanner_auto_yahoo: st.dataframe(scanner_auto_yahoo(), use_container_width=True)
-            else: st.error("Atualize scanner.py")
+            if scanner_auto_yahoo: 
+                with st.spinner("Analisando mercado..."):
+                    st.dataframe(scanner_auto_yahoo(), use_container_width=True)
+            else: st.error("Erro: arquivo scanner.py antigo.")
     else:
         up = st.file_uploader("CSV", type=["csv"])
         if up and scanner_fiis_csv: st.dataframe(scanner_fiis_csv(up))
 
 # ABA 7: OPÇÕES (COMPLETA)
 with tabs[6]:
-    st.subheader("⚡ Simulador Completo")
+    st.subheader("⚡ Simulador Black-Scholes")
     if BlackScholes:
         c1, c2 = st.columns(2)
         with c1:
@@ -168,13 +172,16 @@ with tabs[6]:
             r = st.number_input("Juros %", 13.75)/100
         
         bs = BlackScholes(S, K, T, r, sigma, tipo)
-        gr = bs.calcular_gregas()
-        
-        st.divider()
-        cc1, cc2 = st.columns([1,3])
-        cc1.metric(f"Prêmio {tipo}", f"R$ {bs.calcular_preco():.2f}")
-        cc2.write(pd.DataFrame([gr]))
-    else: st.error("Atualize options.py")
+        try:
+            gr = bs.calcular_gregas()
+            preco = bs.calcular_preco()
+            st.divider()
+            cc1, cc2 = st.columns([1,3])
+            cc1.metric(f"Prêmio {tipo}", f"R$ {preco:.2f}")
+            cc2.write(pd.DataFrame([gr]))
+        except Exception as e:
+            st.error(f"Erro cálculo: {e}. Verifique options.py")
+    else: st.error("Módulo options.py não encontrado ou incompleto.")
 
 # Demais abas
 with tabs[3]: st.session_state.carteira_rf = st.data_editor(st.session_state.carteira_rf, num_rows="dynamic"); st.metric("Total", f"R$ {st.session_state.carteira_rf['Saldo Atual'].sum():,.2f}")

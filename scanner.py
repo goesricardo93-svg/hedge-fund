@@ -1,6 +1,5 @@
 import pandas as pd
 import yfinance as yf
-import io
 
 # --- MODO 1: VIA ARQUIVO (PRECISÃO MÁXIMA) ---
 def scanner_fiis_csv(uploaded_file):
@@ -8,14 +7,11 @@ def scanner_fiis_csv(uploaded_file):
         df = pd.read_csv(uploaded_file, sep=';', encoding='latin-1', thousands='.', decimal=',')
         df.columns = [c.strip() for c in df.columns]
         
-        # Filtros Private Bank
-        df = df[df['Liquidez Media Diaria'] > 500000] # Liquidez > 500k
-        df = df[(df['DY (12M) Media'] > 6.0) & (df['DY (12M) Media'] < 18.0)] # DY Saudável
-        df = df[(df['P/VP'] > 0.80) & (df['P/VP'] < 1.15)] # Preço Justo
+        # Filtros de Segurança
+        df = df[df['Liquidez Media Diaria'] > 500000] 
+        df = df[(df['DY (12M) Media'] > 6.0) & (df['DY (12M) Media'] < 20.0)]
+        df = df[(df['P/VP'] > 0.80) & (df['P/VP'] < 1.20)]
         
-        if 'Vacancia Financeira' in df.columns:
-            df = df[df['Vacancia Financeira'] < 10.0]
-
         cols = ['TICKER', 'PRECO', 'DY (12M) Media', 'P/VP', 'Liquidez Media Diaria', 'SEGMENTO']
         final_cols = [c for c in cols if c in df.columns]
         
@@ -23,9 +19,8 @@ def scanner_fiis_csv(uploaded_file):
     except Exception as e:
         return pd.DataFrame([{"Erro": f"Falha no CSV: {str(e)}"}] )
 
-# --- MODO 2: AUTOMÁTICO (CORREÇÃO DO ERRO) ---
+# --- MODO 2: AUTOMÁTICO (CORRIGIDO PARA NÃO FICAR EM BRANCO) ---
 def scanner_auto_yahoo():
-    # Top 25 FIIs Líquidos para varredura rápida
     tickers_alvo = [
         "MXRF11.SA", "HGLG11.SA", "XPML11.SA", "KNCR11.SA", "KNRI11.SA", 
         "VISC11.SA", "HGBS11.SA", "CPTS11.SA", "HGRU11.SA", "BTLG11.SA",
@@ -36,33 +31,36 @@ def scanner_auto_yahoo():
     
     resultados = []
     
-    # Download em lote (mais rápido)
-    try:
-        dados = yf.download(tickers_alvo, period="1d", progress=False)['Close']
-        if dados.empty: return pd.DataFrame([{"Status": "Erro de conexão com Yahoo Finance."}])
-        
-        for t in tickers_alvo:
-            try:
-                ticker_obj = yf.Ticker(t)
+    for t in tickers_alvo:
+        try:
+            # Baixa individualmente para garantir integridade dos dados
+            ticker_obj = yf.Ticker(t)
+            hist = ticker_obj.history(period="1d")
+            
+            if not hist.empty:
+                preco = float(hist['Close'].iloc[-1])
                 info = ticker_obj.info
                 
-                # Pega preço do lote ou direto
-                preco = float(dados[t].iloc[-1])
-                dy_anual = (info.get('dividendYield', 0) or 0) * 100
+                # Tenta pegar DY de várias formas
+                dy = info.get('dividendYield', 0)
+                if dy is None: dy = 0
+                dy_pct = dy * 100
                 
-                # Filtro de Qualidade Básico
-                if dy_anual > 6.0 and dy_anual < 20.0:
+                # Se DY for zero, tenta calcular na mão (soma ultimos 12 meses) - Opcional, mantendo simples
+                if dy_pct > 4.0: # Filtra coisas sem yield
                     resultados.append({
                         "Ticker": t.replace(".SA", ""),
                         "Preço": f"R$ {preco:.2f}",
-                        "DY (Estimado)": f"{dy_anual:.2f}%",
-                        "Setor": info.get('industry', 'N/A')
+                        "DY (Estimado)": f"{dy_pct:.2f}%",
+                        "Setor": info.get('industry', 'FII')
                     })
-            except: continue
-                
-        df = pd.DataFrame(resultados)
-        if not df.empty:
-            df = df.sort_values(by="DY (Estimado)", ascending=False)
-        return df
-    except Exception as e:
-        return pd.DataFrame([{"Erro": f"Falha na varredura: {str(e)}" }])
+        except:
+            continue
+            
+    df = pd.DataFrame(resultados)
+    if not df.empty:
+        df = df.sort_values(by="DY (Estimado)", ascending=False)
+    else:
+        df = pd.DataFrame([{"Status": "Nenhum dado encontrado. O Yahoo Finance pode estar instável."}])
+    
+    return df
