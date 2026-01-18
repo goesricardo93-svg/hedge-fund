@@ -16,17 +16,18 @@ try:
     from rebalance import rebalancear_e_aportar
     from tax import calcular_darf
     from relatorio import RelatorioPrivate
+    from options import BlackScholes # Módulo Novo
 except ImportError as e:
     st.error(f"Erro Crítico de Arquitetura: Faltam arquivos modulares. Detalhes: {e}")
     st.stop()
 
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 46.0", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 47.0", layout="wide")
 
 # ======================================================
 # 2. CACHE E FUNÇÕES UTILITÁRIAS
 # ======================================================
 @st.cache_data(ttl=3600)
-def obter_dados_v46(ticker): 
+def obter_dados_v47(ticker): 
     try:
         t = yf.Ticker(ticker)
         hist = t.history(period="2y")
@@ -118,7 +119,7 @@ if (hoje.day == 1 or forcar_envio) and f"report_{mes_str}" not in st.session_sta
         try:
             res_auto = []
             for _, row in st.session_state.carteira_acoes.iterrows():
-                r = obter_dados_v46(row["Ticker"])
+                r = obter_dados_v47(row["Ticker"])
                 if r:
                     res_auto.append({
                         "Ticker": row["Ticker"],
@@ -151,13 +152,14 @@ if st.sidebar.button("🔄 Restaurar Padrões"):
     st.session_state.clear()
     st.rerun()
 
-tabs = st.tabs(["🔎 Análise", "💼 Carteira", "🏢 FIIs 360", "🛡️ RF & PGBL", "💰 Futuro", "🦁 Fiscal"])
+# ADICIONADA ABA DE OPÇÕES NA LISTA
+tabs = st.tabs(["🔎 Análise", "💼 Carteira", "🏢 FIIs 360", "🛡️ RF & PGBL", "💰 Futuro", "🦁 Fiscal", "⚡ Opções"])
 
 # --- ABA 1: ANÁLISE ---
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
     motor = MotorAnalise()
-    r = obter_dados_v46(ticker_input)
+    r = obter_dados_v47(ticker_input)
     
     if r:
         # Box Proventos
@@ -207,10 +209,8 @@ with tabs[0]:
         st.subheader("📈 Gráfico Profissional")
         renderizar_tradingview_widget(ticker_input)
         
-        # --- NOVA TABELA OPERACIONAL (ABAIXO DO GRÁFICO) ---
+        # --- TABELA OPERACIONAL (ABAIXO DO GRÁFICO) ---
         st.subheader("🎯 Setup Operacional (IA)")
-        
-        # Criação do DataFrame com os dados calculados pelo Motor
         df_setup = pd.DataFrame([
             {"Indicador": "Preço Atual", "Valor": f"R$ {r['preco']:.2f}"},
             {"Indicador": "Suporte Relevante (60d)", "Valor": f"R$ {r['suporte']:.2f}"},
@@ -218,15 +218,8 @@ with tabs[0]:
             {"Indicador": "🛑 Stop Loss Sugerido", "Valor": f"R$ {r['stop_loss']:.2f}"},
             {"Indicador": "🎯 Stop Gain (Alvo)", "Valor": f"R$ {r['stop_gain']:.2f}"}
         ])
-        
-        # Exibição elegante
-        st.dataframe(
-            df_setup, 
-            use_container_width=True, 
-            hide_index=True
-        )
+        st.dataframe(df_setup, use_container_width=True, hide_index=True)
         st.info("Nota: O Stop Loss é calculado 3% abaixo do suporte recente e o Alvo 2% acima da resistência recente.")
-        # ---------------------------------------------------
 
     else: st.warning("Ativo não encontrado. Tente limpar o cache.")
 
@@ -244,7 +237,7 @@ with tabs[1]:
         bar = st.progress(0)
         total = len(df_ed)
         for i, row in df_ed.iterrows():
-            r = obter_dados_v46(row["Ticker"])
+            r = obter_dados_v47(row["Ticker"])
             if r:
                 rec = r['decisao_ia']
                 if r['preco'] < row['PM'] * 0.95 and r['score_ia'] > 60: rec = "🔥 COMPRA (Abaixo PM)"
@@ -346,3 +339,59 @@ with tabs[5]:
         c1.metric("DARF a Pagar", f"R$ {res['darf']:.2f}")
         c2.write(res["detalhes"])
         st.table(res["memoria"])
+
+# --- ABA 7: OPÇÕES (DERIVATIVOS) ---
+with tabs[6]:
+    st.subheader("⚡ Simulador Black-Scholes & Gregas")
+    col_op1, col_op2 = st.columns([1, 3])
+    
+    with col_op1:
+        st.markdown("#### ⚙️ Parâmetros")
+        op_ticker = st.text_input("Ativo Objeto (Ex: PETR4)", "PETR4.SA").upper()
+        try:
+            op_price_auto = yf.Ticker(formatar_ticker(op_ticker)).history(period="1d")["Close"].iloc[-1]
+        except:
+            op_price_auto = 30.00
+            
+        op_spot = st.number_input("Preço do Ativo (Spot)", value=float(op_price_auto), format="%.2f")
+        op_strike = st.number_input("Strike (Exercício)", value=float(op_price_auto), format="%.2f")
+        op_venc = st.date_input("Vencimento", datetime.date.today() + datetime.timedelta(days=30))
+        op_vol = st.number_input("Volatilidade Implícita (%)", value=30.0) / 100
+        op_taxa = st.number_input("Taxa de Juros (Selic %)", value=12.25) / 100
+        op_tipo = st.selectbox("Tipo", ["Call (Compra)", "Put (Venda)"])
+    
+    with col_op2:
+        hoje_op = datetime.date.today()
+        dias_uteis = np.busday_count(hoje_op, op_venc)
+        anos = dias_uteis / 252
+        
+        if anos <= 0:
+            st.error("A data de vencimento deve ser futura.")
+        else:
+            tipo_calc = "call" if "Call" in op_tipo else "put"
+            bs = BlackScholes(op_spot, op_strike, anos, op_taxa, op_vol, tipo_calc)
+            
+            preco_teorico = bs.calcular_preco()
+            gregas = bs.calcular_gregas()
+            
+            st.markdown(f"### 💎 Preço Justo (Teórico): <span style='color:#4CAF50'>R$ {preco_teorico:.2f}</span>", unsafe_allow_html=True)
+            
+            cg1, cg2, cg3, cg4 = st.columns(4)
+            cg1.metric("Delta (Direção)", f"{gregas['Delta']:.2f}", help="Mudança para cada R$ 1 no ativo")
+            cg2.metric("Gamma (Aceleração)", f"{gregas['Gamma']:.3f}", help="Mudança do Delta")
+            cg3.metric("Theta (Tempo)", f"{gregas['Theta']:.3f}", help="Perda de valor por dia")
+            cg4.metric("Vega (Volatilidade)", f"{gregas['Vega']:.2f}", help="Mudança para cada 1% de Vol")
+            
+            st.divider()
+            st.subheader("📊 Cenário de Payoff (No Vencimento)")
+            x, y = bs.gerar_payoff(range_pct=0.20)
+            
+            fig_op = go.Figure()
+            fig_op.add_hline(y=0, line_dash="dot", line_color="gray")
+            fig_op.add_trace(go.Scatter(x=x, y=y, mode='lines', name='Resultado', line=dict(color='blue', width=3)))
+            fig_op.add_vline(x=op_spot, line_dash="dash", line_color="orange", annotation_text="Preço Atual")
+            fig_op.add_vline(x=op_strike, line_dash="dash", line_color="black", annotation_text="Strike")
+            
+            fig_op.update_layout(title="Simulação de Lucro/Prejuízo", xaxis_title="Preço da Ação no Vencimento", yaxis_title="Lucro/Prejuízo (R$)", template="plotly_white", height=400)
+            st.plotly_chart(fig_op, use_container_width=True)
+            st.info("Dica: O 'Preço Justo' é matemático. Compare com o valor da corretora para achar distorções.")
