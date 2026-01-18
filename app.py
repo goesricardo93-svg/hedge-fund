@@ -10,7 +10,7 @@ from email.mime.text import MIMEText
 # ======================================================
 # 1. CONFIGURAÇÕES & SEGREDOS
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 16.0", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 17.0", layout="wide")
 
 try:
     TELEGRAM_TOKEN = st.secrets["telegram"]["token"]
@@ -131,8 +131,9 @@ def disparar_alerta(titulo, corpo):
         )
     except: pass
 
+# --- FUNÇÃO RENOMEADA E PADRONIZADA ---
 @st.cache_data(ttl=3600)
-def obter_dados_seguros_v5(ticker):
+def obter_dados_final(ticker):
     try:
         t = yf.Ticker(ticker)
         hist = t.history(period="2y")
@@ -151,7 +152,6 @@ def scanner_fiis_csv(uploaded_file):
     try:
         df = pd.read_csv(uploaded_file, sep=";", encoding="latin-1")
         
-        # Limpeza Numérica BR
         def limpar_numero(x):
             if isinstance(x, str):
                 x = x.replace('%', '').replace('.', '').replace(',', '.')
@@ -159,7 +159,6 @@ def scanner_fiis_csv(uploaded_file):
                 except: return 0.0
             return x
 
-        # Mapeamento Flexível
         mapa = {c.upper().strip(): c for c in df.columns}
         
         col_dy = mapa.get("DY") or mapa.get("DIVIDEND YIELD")
@@ -172,24 +171,20 @@ def scanner_fiis_csv(uploaded_file):
 
         if not (col_dy and col_pvp and col_ticker): return pd.DataFrame()
 
-        # Aplica limpeza
         df["DY_N"] = df[col_dy].apply(limpar_numero)
         df["PVP_N"] = df[col_pvp].apply(limpar_numero)
         df["VAC_N"] = df[col_vac].apply(limpar_numero) if col_vac else 0
         df["LIQ_N"] = df[col_liq].apply(limpar_numero) if col_liq else 0
         
-        # Lógica "Análise 360" do Ricardo
         def analise_360_fii(row):
             p_vp = row["PVP_N"]
             vac = row["VAC_N"]
             seg = str(row[col_seg]).upper() if col_seg else ""
             
-            # Lógica Papel vs Tijolo simplificada
             if "PAPEL" in seg or "RECEB" in seg:
                 if 0.90 <= p_vp <= 1.02: return "🔥 COMPRA (Papel)"
                 return "⚪ OBSERVAR"
             
-            # Lógica Tijolo
             if vac < 10 and p_vp < 0.95: return "🏢 OPORTUNIDADE (Tijolo)"
             if vac > 15: return "🔴 CUIDADO (Vacância)"
             
@@ -198,7 +193,6 @@ def scanner_fiis_csv(uploaded_file):
 
         df["Veredito 360"] = df.apply(analise_360_fii, axis=1)
 
-        # Cálculo de Score
         def calc_score(row):
             s = 50
             if row["DY_N"] > 9: s += 20
@@ -208,11 +202,11 @@ def scanner_fiis_csv(uploaded_file):
             if row["LIQ_N"] > 1000000: s += 10
             if row["VAC_N"] > 10: s -= 20
             if row["PVP_N"] > 1.15: s -= 15
+            
             return min(100, max(0, s))
 
         df["Score"] = df.apply(calc_score, axis=1)
         
-        # Seleção Final
         cols_final = [col_ticker, col_preco, col_dy, col_pvp, "Score", "Veredito 360"]
         if col_vac: cols_final.append(col_vac)
         
@@ -226,7 +220,6 @@ def scanner_fiis_csv(uploaded_file):
 # 4. SESSION STATE (SUA CARTEIRA OFICIAL)
 # ======================================================
 if "carteira_acoes" not in st.session_state:
-    # LISTA INTEGRAL DO USUÁRIO
     dados = [
         ["ALZR11.SA", 100, 10.81], ["BBAS3.SA", 1703, 24.48], ["BBSE3.SA", 55, 35.64],
         ["BTCI11.SA", 502, 10.16], ["BTLG11.SA", 60, 98.50], ["CCME11.SA", 152, 8.55],
@@ -273,7 +266,8 @@ tabs = st.tabs(["🔎 Análise Técnica", "💼 Carteira Geral", "🏢 Scanner F
 # --- ABA 1: ANÁLISE ---
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
-    r = obter_dados_seguros_v4(ticker_input)
+    # CHAMADA CORRIGIDA AQUI:
+    r = obter_dados_final(ticker_input)
     
     if r:
         col_ia1, col_ia2 = st.columns([1, 3])
@@ -322,7 +316,7 @@ with tabs[0]:
                                             low=hist_chart["Low"].iloc[:,0] if isinstance(hist_chart["Low"], pd.DataFrame) else hist_chart["Low"],
                                             close=close, name="Preço"))
                 
-                # AQUI FOI A CORREÇÃO PRINCIPAL:
+                # LINHA CORRIGIDA:
                 fig.add_trace(go.Scatter(x=hist_chart.index, y=mm50, name="MM50", line=dict(color='blue', width=1)))
 
                 fig.add_hline(y=r['suporte'], line_dash="dot", line_color="green", annotation_text="SUPORTE")
@@ -345,10 +339,10 @@ with tabs[1]:
         bar = st.progress(0)
         total = len(df_ed)
         for i, row in df_ed.iterrows():
-            r = obter_dados_seguros_v4(row["Ticker"])
+            # CHAMADA CORRIGIDA AQUI TAMBÉM:
+            r = obter_dados_final(row["Ticker"])
             if r:
                 rec = r['decisao_ia']
-                # Recomendação simples baseada em PM
                 if r['preco'] < row['PM'] * 0.95 and "COMPRA" in rec: rec = "🔥 COMPRA FORTE (Abaixo PM)"
                 
                 res.append({
@@ -369,26 +363,24 @@ with tabs[1]:
 # --- ABA 3: FIIs 360 ---
 with tabs[2]:
     st.subheader("🏢 Scanner FIIs 360º")
-    st.info("Faça upload do CSV do StatusInvest. O sistema calculará o Score IA automaticamente.")
+    st.info("Faça upload do CSV do StatusInvest. O sistema usará sua lógica de Papel vs Tijolo.")
     
     uploaded = st.file_uploader("Arraste o arquivo aqui", type=["csv"])
     if uploaded:
         df_fii = scanner_fiis_csv(uploaded)
         if not df_fii.empty:
-            st.success(f"{len(df_fii)} FIIs processados com sucesso!")
-            # Mostra as melhores oportunidades primeiro
+            st.success(f"{len(df_fii)} FIIs processados!")
             st.dataframe(df_fii.head(30).style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
         else:
-            st.warning("Erro ao ler CSV. Verifique se é o arquivo correto do StatusInvest.")
+            st.warning("Erro ao ler CSV.")
 
 # --- ABA 4: FUTURO ---
 with tabs[3]:
     st.subheader("🔮 Simulação Patrimonial")
     if not df_ed.empty:
-        # Calcula patrimônio atual real da carteira
         patrimonio_atual = 0
         for _, row in df_ed.iterrows():
-            patrimonio_atual += row['Qtd'] * row['PM'] # Aproximação pelo PM
+            patrimonio_atual += row['Qtd'] * row['PM']
         
         st.metric("Patrimônio Base (Custo)", f"R$ {patrimonio_atual:,.2f}")
         aporte = st.number_input("Aporte Mensal", 2000.0)
