@@ -10,7 +10,7 @@ from email.mime.text import MIMEText
 # ======================================================
 # 1. CONFIGURAÇÕES
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 24.0", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 25.0", layout="wide")
 
 try:
     TELEGRAM_TOKEN = st.secrets["telegram"]["token"]
@@ -24,19 +24,19 @@ except:
     EMAIL_PASS = ""
 
 # ======================================================
-# 2. MOTOR DE ANÁLISE (CÉREBRO)
+# 2. MOTOR DE ANÁLISE (AÇÕES)
 # ======================================================
 class MotorAnalise:
     def analisar(self, hist, info, ticker):
         try:
             if hist is None or hist.empty: return None
 
-            # --- PREÇO ATUAL ---
+            # DADOS
             fechamento = hist["Close"]
             if isinstance(fechamento, pd.DataFrame): fechamento = fechamento.iloc[:, 0]
             preco_atual = float(fechamento.iloc[-1])
             
-            # --- TÉCNICA (RSI + VOL) ---
+            # TÉCNICA
             delta = fechamento.diff()
             gain = delta.clip(lower=0).rolling(14).mean()
             loss = -delta.clip(upper=0).rolling(14).mean()
@@ -48,46 +48,37 @@ class MotorAnalise:
             topo = fechamento.cummax()
             drawdown = ((fechamento - topo) / topo).min() * 100
 
-            # --- ALVOS TÉCNICOS (PREÇO TETO IA) ---
             window = 60 
             suporte = float(fechamento.tail(window).min())
             resistencia = float(fechamento.tail(window).max())
             stop_loss = suporte * 0.97
-            teto_tecnico = resistencia * 1.02 # Alvo da IA
+            teto_tecnico = resistencia * 1.02
 
-            # --- FUNDAMENTOS (DY BLINDADO) ---
-            # Prioridade: Cálculo manual (Div em R$ / Preço) para evitar erro da API
+            # FUNDAMENTOS
             div_rate = info.get("trailingAnnualDividendRate", 0) or info.get("dividendRate", 0) or 0
             if div_rate > 0:
                 dy = div_rate / preco_atual
             else:
                 dy = info.get("dividendYield", 0) or 0
-                if dy > 2.0: dy = dy / 100 # Corrige escala (ex: 1214% -> 12.14%)
+                if dy > 2.0: dy = dy / 100
             
             lpa = info.get("trailingEps", 0) or 0
             vpa = info.get("bookValue", 0) or 0
             
-            # VALUATION (Preços Justos)
-            # Bazin: usa o dividendo em reais se disponível, senão projeta pelo DY
+            # VALUATION
             dpa = div_rate if div_rate > 0 else (preco_atual * dy)
             p_bazin = dpa / 0.06 if dpa > 0 else 0
-            
-            # Graham
             p_graham = np.sqrt(22.5 * lpa * vpa) if (lpa > 0 and vpa > 0) else 0
-            
-            # Gordon (Proxy)
             p_gordon = p_bazin
 
-            # --- SCORE IA (0-100) ---
+            # SCORE IA
             score = 50
             motivos = []
 
-            # Pontos Valuation
             if p_bazin > 0 and preco_atual < p_bazin: score += 20; motivos.append("Desconto Bazin")
             if p_graham > 0 and preco_atual < p_graham: score += 20; motivos.append("Desconto Graham")
             if dy > 0.06: score += 10; motivos.append(f"DY > 6% ({dy*100:.1f}%)")
 
-            # Pontos Técnica
             if rsi < 30: score += 20; motivos.append("RSI Sobrevendido")
             elif rsi > 70: score -= 20; motivos.append("RSI Esticado")
             if preco_atual <= suporte * 1.03: score += 10; motivos.append("Suporte Forte")
@@ -111,7 +102,7 @@ class MotorAnalise:
                 "suporte": suporte,
                 "resistencia": resistencia,
                 "stop_loss": stop_loss,
-                "stop_gain": teto_tecnico, # Teto da IA
+                "stop_gain": teto_tecnico,
                 "score_ia": score,
                 "decisao_ia": decisao,
                 "motivos": ", ".join(motivos),
@@ -155,7 +146,7 @@ def disparar_alerta(titulo, corpo):
     except: pass
 
 @st.cache_data(ttl=3600)
-def obter_dados_seguros_v12(ticker):
+def obter_dados_seguros_v13(ticker):
     try:
         t_obj = yf.Ticker(ticker)
         hist = t_obj.history(period="2y")
@@ -169,7 +160,7 @@ def get_rsi_status(val):
     if val > 70: return f"🔴 SOBRECOMPRA ({val:.0f})"
     return f"⚪ NEUTRO ({val:.0f})"
 
-# === SCANNER FII INTEIGENTE ===
+# === SCANNER FII PROFISSIONAL (COM SEGMENTAÇÃO) ===
 def scanner_fiis_csv(uploaded_file):
     try:
         df = pd.read_csv(uploaded_file, sep=";", encoding="latin-1")
@@ -197,37 +188,64 @@ def scanner_fiis_csv(uploaded_file):
         df["PVP_N"] = df[col_pvp].apply(limpar_numero)
         df["VAC_N"] = df[col_vac].apply(limpar_numero) if col_vac else 0
         df["LIQ_N"] = df[col_liq].apply(limpar_numero) if col_liq else 0
+        df["SEGMENTO_N"] = df[col_seg].str.upper() if col_seg else "OUTROS"
+
+        # --- CLASSIFICAÇÃO DE SEGMENTO ---
+        def classificar_segmento(s):
+            s = str(s)
+            if "PAPEL" in s or "RECEB" in s or "CRI" in s: return "PAPEL"
+            if "SHOP" in s or "LOG" in s or "LAJE" in s or "TIJOLO" in s or "HIBRIDO" in s: return "TIJOLO"
+            if "AGRO" in s or "RURAL" in s: return "AGRO"
+            return "OUTROS"
+
+        df["CATEGORIA"] = df["SEGMENTO_N"].apply(classificar_segmento)
+
+        # --- ANÁLISE FUNDAMENTALISTA DE FIIs (MOTIVOS) ---
+        def analisar_fii(row):
+            score = 50 # Base neutra
+            motivos = []
+            
+            # 1. Dividend Yield (Peso Alto)
+            if row["DY_N"] > 14: 
+                score += 10; motivos.append("DY Explosivo (Risco?)")
+            elif row["DY_N"] > 9: 
+                score += 20; motivos.append("DY Excelente")
+            elif row["DY_N"] < 6: 
+                score -= 15; motivos.append("DY Baixo")
+
+            # 2. P/VP (Oportunidade vs Ágio)
+            if 0.85 <= row["PVP_N"] <= 1.0: 
+                score += 20; motivos.append("Preço Justo")
+            elif row["PVP_N"] < 0.80: 
+                score += 15; motivos.append("Desconto Patrimonial") # Pode ser risco
+            elif row["PVP_N"] > 1.15: 
+                score -= 20; motivos.append("Muito Caro (Ágio)")
+
+            # 3. Vacância (Matador de Tijolo)
+            if row["CATEGORIA"] == "TIJOLO":
+                if row["VAC_N"] > 15: 
+                    score -= 30; motivos.append("Vacância Crítica")
+                elif row["VAC_N"] < 5: 
+                    score += 10; motivos.append("Ocupação Alta")
+
+            # 4. Liquidez
+            if row["LIQ_N"] < 200000: 
+                score -= 10; motivos.append("Baixa Liquidez")
+            
+            score = min(100, max(0, score))
+            
+            # Veredito Texto
+            if score >= 75: veredito = "🔥 COMPRA FORTE"
+            elif score >= 60: veredito = "🟢 COMPRA"
+            elif score <= 40: veredito = "🔴 EVITAR/VENDER"
+            else: veredito = "⚪ MANTER"
+
+            return pd.Series([score, ", ".join(motivos), veredito])
+
+        df[["Score", "Motivos (IA)", "Veredito"]] = df.apply(analisar_fii, axis=1)
         
-        def analise_360_fii(row):
-            p_vp = row["PVP_N"]
-            vac = row["VAC_N"]
-            seg = str(row[col_seg]).upper() if col_seg else ""
-            
-            if "PAPEL" in seg or "RECEB" in seg:
-                if 0.90 <= p_vp <= 1.02: return "🔥 COMPRA (Papel)"
-                return "⚪ OBSERVAR"
-            
-            if vac < 10 and p_vp < 0.95: return "🏢 OPORTUNIDADE (Tijolo)"
-            if vac > 15: return "🔴 CUIDADO (Vacância)"
-            
-            if 0.85 <= p_vp <= 1.0: return "✅ VALOR JUSTO"
-            return "⚪ NEUTRO"
-
-        df["Veredito 360"] = df.apply(analise_360_fii, axis=1)
-
-        def calc_score(row):
-            s = 50
-            if row["DY_N"] > 9: s += 20
-            elif row["DY_N"] > 6: s += 10
-            if 0.85 <= row["PVP_N"] <= 1.0: s += 20
-            if row["LIQ_N"] > 1000000: s += 10
-            if row["VAC_N"] > 10: s -= 20
-            if row["PVP_N"] > 1.15: s -= 15
-            return min(100, max(0, s))
-
-        df["Score"] = df.apply(calc_score, axis=1)
-        
-        cols_final = [col_ticker, col_preco, col_dy, col_pvp, "Score", "Veredito 360"]
+        # Colunas finais
+        cols_final = [col_ticker, "CATEGORIA", col_preco, col_dy, col_pvp, "Score", "Veredito", "Motivos (IA)"]
         if col_vac: cols_final.append(col_vac)
         
         return df[cols_final].sort_values("Score", ascending=False)
@@ -257,8 +275,8 @@ if "carteira_acoes" not in st.session_state:
 
 if "metas_setor" not in st.session_state:
     st.session_state.metas_setor = pd.DataFrame([
-        ["Bancos", 0.15], ["Mineração", 0.10], ["Elétricas", 0.15], ["Holding", 0.10],
-        ["Logística", 0.10], ["Papel", 0.10], ["FII", 0.20], ["Outros", 0.10]
+        ["Bancos", 0.15], ["Mineração", 0.10], ["Elétricas", 0.15], ["FII", 0.20],
+        ["Seguros", 0.10], ["Papel", 0.10], ["Saneamento", 0.10], ["Outros", 0.10]
     ], columns=["Setor", "Meta"])
 
 if "alertas_enviados" not in st.session_state:
@@ -273,7 +291,7 @@ ticker_input = formatar_ticker(ticker_raw)
 
 # Sidebar Metas
 st.sidebar.markdown("---")
-st.sidebar.subheader("🎯 Metas por Setor")
+st.sidebar.subheader("🎯 Metas de Alocação")
 df_metas = st.sidebar.data_editor(st.session_state.metas_setor, num_rows="dynamic", key="side_metas")
 st.session_state.metas_setor = df_metas
 
@@ -299,7 +317,7 @@ tabs = st.tabs(["🔎 Análise Técnica", "💼 Carteira Geral", "🏢 Scanner F
 # --- ABA 1: ANÁLISE ---
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
-    r = obter_dados_seguros_v12(ticker_input)
+    r = obter_dados_seguros_v13(ticker_input)
     
     if r:
         col_ia1, col_ia2 = st.columns([1, 3])
@@ -312,10 +330,9 @@ with tabs[0]:
         st.write(f"**Gatilhos:** {r['motivos']}")
         st.divider()
 
-        # MÉTRICAS COM TETO IA (STOP GAIN)
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Preço Atual", f"R$ {r['preco']:.2f}")
-        c2.metric("Teto (Alvo IA)", f"R$ {r['stop_gain']:.2f}") # Teto Técnico
+        c2.metric("Teto (Alvo IA)", f"R$ {r['stop_gain']:.2f}") 
         c3.metric("RSI", f"{r['rsi']:.0f}")
         c4.metric("Volatilidade", f"{r['volatilidade']*100:.1f}%")
 
@@ -371,11 +388,16 @@ with tabs[1]:
         bar = st.progress(0)
         total = len(df_ed)
         for i, row in df_ed.iterrows():
-            r = obter_dados_seguros_v12(row["Ticker"])
+            r = obter_dados_seguros_v13(row["Ticker"])
             if r:
                 rec = r['decisao_ia']
                 if r['preco'] < row['PM'] * 0.95 and "COMPRA" in rec: rec = "🔥 COMPRA FORTE (Abaixo PM)"
                 
+                # Disparo de Alerta (Mantido!)
+                if r['score_ia'] >= 80 and row["Ticker"] not in st.session_state.alertas_enviados:
+                    disparar_alerta(f"OPORTUNIDADE: {row['Ticker']}", f"Score: {r['score_ia']}\nPreço: {r['preco']}")
+                    st.session_state.alertas_enviados.add(row["Ticker"])
+
                 res.append({
                     "Ticker": row["Ticker"],
                     "Preço": r["preco"],
@@ -397,23 +419,38 @@ with tabs[1]:
 # --- ABA 3: FIIs 360 ---
 with tabs[2]:
     st.subheader("🏢 Scanner FIIs 360º")
-    uploaded = st.file_uploader("Upload CSV StatusInvest", type=["csv"])
+    st.info("Faça upload do CSV 'statusinvest-busca-avancada.csv'.")
+    uploaded = st.file_uploader("Arraste o arquivo aqui", type=["csv"])
+    
     if uploaded:
         df_fii = scanner_fiis_csv(uploaded)
         if not df_fii.empty:
-            st.success(f"{len(df_fii)} FIIs processados!")
-            st.dataframe(df_fii.head(30).style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
+            st.success(f"{len(df_fii)} FIIs analisados com Segmentação e IA!")
+            
+            # --- SUB-ABAS POR SEGMENTO (NOVIDADE) ---
+            tab_all, tab_papel, tab_tijolo, tab_agro, tab_outros = st.tabs(["🌎 Todos", "📄 Papel", "🧱 Tijolo", "🌱 Agro", "⚙️ Outros"])
+            
+            cols_view = ["TICKER", "PRECO", "DY", "P/VP", "Score", "Veredito", "Motivos (IA)"]
+            
+            with tab_all:
+                st.dataframe(df_fii[cols_view].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
+            with tab_papel:
+                st.dataframe(df_fii[df_fii["CATEGORIA"]=="PAPEL"][cols_view].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
+            with tab_tijolo:
+                st.dataframe(df_fii[df_fii["CATEGORIA"]=="TIJOLO"][cols_view].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
+            with tab_agro:
+                st.dataframe(df_fii[df_fii["CATEGORIA"]=="AGRO"][cols_view].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
+            with tab_outros:
+                st.dataframe(df_fii[df_fii["CATEGORIA"]=="OUTROS"][cols_view].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
+
         else:
-            st.warning("Erro ao ler CSV.")
+            st.warning("Erro ao ler CSV ou colunas não encontradas.")
 
 # --- ABA 4: FUTURO ---
 with tabs[3]:
     st.subheader("🔮 Simulação Patrimonial")
     if not df_ed.empty:
-        patrimonio_atual = 0
-        for _, row in df_ed.iterrows():
-            patrimonio_atual += row['Qtd'] * row['PM']
-        
+        patrimonio_atual = (df_ed['Qtd'] * df_ed['PM']).sum()
         st.metric("Patrimônio Base (Custo)", f"R$ {patrimonio_atual:,.2f}")
         aporte = st.number_input("Aporte Mensal", 2000.0)
         
