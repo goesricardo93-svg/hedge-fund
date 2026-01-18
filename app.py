@@ -10,7 +10,7 @@ from email.mime.text import MIMEText
 # ======================================================
 # 1. CONFIGURAÇÕES
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 25.0", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 26.0", layout="wide")
 
 try:
     TELEGRAM_TOKEN = st.secrets["telegram"]["token"]
@@ -146,7 +146,7 @@ def disparar_alerta(titulo, corpo):
     except: pass
 
 @st.cache_data(ttl=3600)
-def obter_dados_seguros_v13(ticker):
+def obter_dados_seguros_v14(ticker): # v14 para limpar cache
     try:
         t_obj = yf.Ticker(ticker)
         hist = t_obj.history(period="2y")
@@ -160,7 +160,7 @@ def get_rsi_status(val):
     if val > 70: return f"🔴 SOBRECOMPRA ({val:.0f})"
     return f"⚪ NEUTRO ({val:.0f})"
 
-# === SCANNER FII PROFISSIONAL (COM SEGMENTAÇÃO) ===
+# === SCANNER FII COM SEGMENTAÇÃO CORRIGIDA ===
 def scanner_fiis_csv(uploaded_file):
     try:
         df = pd.read_csv(uploaded_file, sep=";", encoding="latin-1")
@@ -180,7 +180,7 @@ def scanner_fiis_csv(uploaded_file):
         col_liq = mapa.get("LIQUIDEZ MEDIA DIARIA")
         col_ticker = mapa.get("TICKER") or mapa.get("ATIVO")
         col_preco = mapa.get("PRECO") or mapa.get("PREÇO") or mapa.get("COTACAO")
-        col_seg = mapa.get("SEGMENTO")
+        col_seg = mapa.get("SEGMENTO") or mapa.get("SETOR")
 
         if not (col_dy and col_pvp and col_ticker): return pd.DataFrame()
 
@@ -188,14 +188,21 @@ def scanner_fiis_csv(uploaded_file):
         df["PVP_N"] = df[col_pvp].apply(limpar_numero)
         df["VAC_N"] = df[col_vac].apply(limpar_numero) if col_vac else 0
         df["LIQ_N"] = df[col_liq].apply(limpar_numero) if col_liq else 0
-        df["SEGMENTO_N"] = df[col_seg].str.upper() if col_seg else "OUTROS"
+        
+        # Garante string na coluna de segmento
+        df["SEGMENTO_N"] = df[col_seg].astype(str).str.upper().fillna("OUTROS") if col_seg else "OUTROS"
 
-        # --- CLASSIFICAÇÃO DE SEGMENTO ---
+        # --- NOVA LÓGICA DE CLASSIFICAÇÃO (DICIONÁRIO DE SINÔNIMOS) ---
         def classificar_segmento(s):
-            s = str(s)
-            if "PAPEL" in s or "RECEB" in s or "CRI" in s: return "PAPEL"
-            if "SHOP" in s or "LOG" in s or "LAJE" in s or "TIJOLO" in s or "HIBRIDO" in s: return "TIJOLO"
-            if "AGRO" in s or "RURAL" in s: return "AGRO"
+            # PAPEL: Títulos e Valores Mobiliários, Recebíveis, Papéis
+            if any(x in s for x in ["PAPEL", "RECEB", "TITULO", "TÍTULO", "VAL. MOB", "CRI", "FINANCEIRO"]): 
+                return "PAPEL"
+            # TIJOLO: Lajes, Shoppings, Logística, Híbrido, Varejo, Hospital, etc.
+            if any(x in s for x in ["TIJOLO", "SHOP", "LOG", "LAJE", "ESCRIT", "INDUSTRIAL", "HIBRIDO", "HÍBRIDO", "VAREJO", "HOSPITAL", "EDUCACIONAL", "RESIDENCIAL"]): 
+                return "TIJOLO"
+            # AGRO: Fiagro, Rural
+            if any(x in s for x in ["AGRO", "RURAL", "TERRA"]): 
+                return "AGRO"
             return "OUTROS"
 
         df["CATEGORIA"] = df["SEGMENTO_N"].apply(classificar_segmento)
@@ -207,21 +214,21 @@ def scanner_fiis_csv(uploaded_file):
             
             # 1. Dividend Yield (Peso Alto)
             if row["DY_N"] > 14: 
-                score += 10; motivos.append("DY Explosivo (Risco?)")
+                score += 5; motivos.append("DY Explosivo (Risco?)")
             elif row["DY_N"] > 9: 
                 score += 20; motivos.append("DY Excelente")
             elif row["DY_N"] < 6: 
                 score -= 15; motivos.append("DY Baixo")
 
             # 2. P/VP (Oportunidade vs Ágio)
-            if 0.85 <= row["PVP_N"] <= 1.0: 
+            if 0.85 <= row["PVP_N"] <= 1.05: 
                 score += 20; motivos.append("Preço Justo")
             elif row["PVP_N"] < 0.80: 
-                score += 15; motivos.append("Desconto Patrimonial") # Pode ser risco
+                score += 15; motivos.append("Desconto Patrimonial") 
             elif row["PVP_N"] > 1.15: 
-                score -= 20; motivos.append("Muito Caro (Ágio)")
+                score -= 20; motivos.append("Caro (Ágio)")
 
-            # 3. Vacância (Matador de Tijolo)
+            # 3. Vacância (Apenas para Tijolo)
             if row["CATEGORIA"] == "TIJOLO":
                 if row["VAC_N"] > 15: 
                     score -= 30; motivos.append("Vacância Crítica")
@@ -244,7 +251,7 @@ def scanner_fiis_csv(uploaded_file):
 
         df[["Score", "Motivos (IA)", "Veredito"]] = df.apply(analisar_fii, axis=1)
         
-        # Colunas finais
+        # Colunas finais para exibição
         cols_final = [col_ticker, "CATEGORIA", col_preco, col_dy, col_pvp, "Score", "Veredito", "Motivos (IA)"]
         if col_vac: cols_final.append(col_vac)
         
@@ -317,7 +324,7 @@ tabs = st.tabs(["🔎 Análise Técnica", "💼 Carteira Geral", "🏢 Scanner F
 # --- ABA 1: ANÁLISE ---
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
-    r = obter_dados_seguros_v13(ticker_input)
+    r = obter_dados_seguros_v14(ticker_input)
     
     if r:
         col_ia1, col_ia2 = st.columns([1, 3])
@@ -388,7 +395,7 @@ with tabs[1]:
         bar = st.progress(0)
         total = len(df_ed)
         for i, row in df_ed.iterrows():
-            r = obter_dados_seguros_v13(row["Ticker"])
+            r = obter_dados_seguros_v14(row["Ticker"])
             if r:
                 rec = r['decisao_ia']
                 if r['preco'] < row['PM'] * 0.95 and "COMPRA" in rec: rec = "🔥 COMPRA FORTE (Abaixo PM)"
@@ -427,7 +434,7 @@ with tabs[2]:
         if not df_fii.empty:
             st.success(f"{len(df_fii)} FIIs analisados com Segmentação e IA!")
             
-            # --- SUB-ABAS POR SEGMENTO (NOVIDADE) ---
+            # --- SUB-ABAS POR SEGMENTO ---
             tab_all, tab_papel, tab_tijolo, tab_agro, tab_outros = st.tabs(["🌎 Todos", "📄 Papel", "🧱 Tijolo", "🌱 Agro", "⚙️ Outros"])
             
             cols_view = ["TICKER", "PRECO", "DY", "P/VP", "Score", "Veredito", "Motivos (IA)"]
