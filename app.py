@@ -4,6 +4,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
+# --- 1. IMPORTAÇÃO SEGURA ---
 try:
     from motor import MotorAnalise
     from rebalance import rebalancear_e_aportar
@@ -17,14 +18,16 @@ except ImportError as e:
     st.error(f"Erro crítico: {e}")
     st.stop()
 
-st.set_page_config(page_title="Hedge Fund Ricardo v64.0 (Algo-Trading)", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo v64.1", layout="wide")
 
+# --- 2. ESTRATÉGIA ---
 METAS = {
     "Renda Fixa": 30.0, "Exterior": 20.0,
     "Ações-Bancos": 7.5, "Ações-Elétricas": 7.5, "Ações-Seguridade": 6.0, "Ações-Commodities": 6.0, "Ações-Outros": 3.0,
     "FIIs-Papel": 10.0, "FIIs-Tijolo": 6.0, "FIIs-Outros": 4.0
 }
 
+# --- 3. CACHE E MOTOR ---
 @st.cache_data(ttl=3600)
 def obter_dados(ticker):
     try:
@@ -35,8 +38,15 @@ def obter_dados(ticker):
 
 @st.cache_data(ttl=86400)
 def download_historico_longo(tickers):
-    data = yf.download(tickers, period="5y", progress=False)
-    return data["Adj Close"] if "Adj Close" in data else data["Close"]
+    # Função segura para baixar dados de múltiplos tickers para Monte Carlo
+    try:
+        data = yf.download(tickers, period="5y", progress=False)
+        # Ajuste para diferentes formatos de retorno do yfinance
+        if isinstance(data, pd.DataFrame):
+            if "Adj Close" in data: return data["Adj Close"]
+            if "Close" in data: return data["Close"]
+        return data
+    except: return pd.DataFrame()
 
 def auto_classificar():
     motor = MotorAnalise()
@@ -51,6 +61,7 @@ def auto_classificar():
     prog.empty()
     st.success("Concluído!")
 
+# --- 4. INICIALIZAÇÃO ---
 if "carteira_acoes" not in st.session_state:
     st.session_state.carteira_acoes = pd.DataFrame([
         ["BBAS3.SA", 100, 24.50, "Aguardando..."],
@@ -62,6 +73,7 @@ if "carteira_acoes" not in st.session_state:
 if "carteira_rf" not in st.session_state:
     st.session_state.carteira_rf = pd.DataFrame([["Tesouro Selic", 10000.0, "Pós"]], columns=["Ativo", "Saldo Atual", "Tipo"])
 
+# --- 5. INTERFACE ---
 st.title("💰 Hedge Fund Ricardo")
 st.sidebar.button("🧹 Limpar Cache", on_click=lambda: st.cache_data.clear())
 
@@ -94,13 +106,13 @@ with tabs[0]:
             if "⚠️" in motivos or "⛔" in motivos: k2.error(motivos)
             else: k2.info(motivos)
 
-            # 3. PAINEL ALGO-TRADING (RESTAURADO DA V50.1)
+            # 3. PAINEL ALGO-TRADING (RESTAURADO)
             st.subheader("📈 Painel Algo-Trading (Técnico)")
             
-            # Métricas em Colunas (Visual)
+            # Métricas em Colunas
             tec1, tec2, tec3, tec4 = st.columns(4)
-            tec1.metric("Tendência (9x21)", r['tendencia'], delta_color="normal")
-            tec2.metric("MACD Status", r['status_macd'], delta=f"{r['macd']:.2f}")
+            tec1.metric("Tendência (9x21)", r.get('sinal_tecnico', '-'))
+            tec2.metric("MACD Status", "COMPRA" if r['macd'] > r['macd_signal'] else "VENDA", delta=f"{r['macd']:.2f}")
             tec3.metric("🛑 Stop Loss", f"R$ {r['stop_loss']:.2f}")
             tec4.metric("✅ Stop Gain", f"R$ {r['stop_gain']:.2f}")
 
@@ -114,7 +126,7 @@ with tabs[0]:
             ])
             st.dataframe(df_algo, use_container_width=True)
 
-            # 4. GRÁFICO TRADINGVIEW (OBRIGATÓRIO)
+            # 4. GRÁFICO TRADINGVIEW
             st.markdown("---")
             tv_sym = f"BMFBOVESPA:{t.replace('.SA','')}"
             components.html(f"""
@@ -148,18 +160,44 @@ with tabs[1]:
             st.success("Plano de Compra:")
             st.dataframe(df_show[["Ticker", "Setor", "Score", "Aporte Sugerido (R$)"]].style.format({"Aporte Sugerido (R$)": "R$ {:.2f}"}), use_container_width=True)
 
-# === DEMAIS ABAS ===
+# === ABA 3: SCANNER ===
 with tabs[2]:
     st.subheader("Scanner FIIs")
     up = st.file_uploader("Upload CSV", type=["csv"])
     if up and scanner_fiis_csv: st.dataframe(scanner_fiis_csv(up))
 
+# === ABA 4: RENDA FIXA ===
 with tabs[3]:
     st.subheader("Renda Fixa")
     st.session_state.carteira_rf = st.data_editor(st.session_state.carteira_rf, num_rows="dynamic")
     st.metric("Total RF", f"R$ {st.session_state.carteira_rf['Saldo Atual'].sum():,.2f}")
 
+# === ABA 5: FUTURO (MONTE CARLO) - CORRIGIDO AQUI ===
 with tabs[4]:
     st.subheader("Monte Carlo")
     if st.button("Simular"):
-        tks = st.session_state.carteira_acoes["Ticker
+        # AQUI ESTAVA O ERRO ANTES, AGORA ESTÁ CORRIGIDO:
+        tks = st.session_state.carteira_acoes["Ticker"].tolist()
+        
+        h = download_historico_longo(tks)
+        if not h.empty:
+            # Tratamento para garantir que pct_change funcione
+            r = h.pct_change().dropna().mean(axis=1) if isinstance(h, pd.DataFrame) else h.pct_change().dropna()
+            # Chama o motor se a serie não estiver vazia
+            if len(r) > 0:
+                st.line_chart(MotorAnalise().monte_carlo_carteira(r, 100000, 2000))
+            else:
+                st.warning("Dados insuficientes para simulação.")
+        else: st.error("Erro ao baixar histórico para simulação.")
+
+# === ABA 6: FISCAL ===
+with tabs[5]:
+    st.subheader("Fiscal")
+    if st.button("Calcular") and calcular_darf: st.write(calcular_darf(st.session_state.carteira_acoes))
+
+# === ABA 7: OPÇÕES ===
+with tabs[6]:
+    st.subheader("Opções")
+    if BlackScholes:
+        s = st.number_input("Spot", 30.0); k = st.number_input("Strike", 32.0)
+        st.metric("Call", f"R$ {BlackScholes(s, k, 1/12, 0.12, 0.3, 'call').calcular_preco():.2f}")
