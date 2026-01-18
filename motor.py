@@ -22,39 +22,65 @@ class MotorAnalise:
         try:
             if hist is None or hist.empty: return None
             
+            # --- DADOS TÉCNICOS COMPLETOS (RESTAURADOS) ---
             fechamento = hist["Close"]
             volume = hist["Volume"]
-            preco_atual = float(fechamento.iloc[-1])
+            if len(fechamento) < 30: return None
             
-            # --- CÁLCULO DE DY (LÓGICA v50.1 RESTAURADA) ---
+            preco_atual = float(fechamento.iloc[-1])
+
+            # Médias Móveis (Tendência)
+            mme9 = fechamento.ewm(span=9, adjust=False).mean()
+            mme21 = fechamento.ewm(span=21, adjust=False).mean()
+            
+            # MACD (Momento)
+            ema12 = fechamento.ewm(span=12, adjust=False).mean()
+            ema26 = fechamento.ewm(span=26, adjust=False).mean()
+            macd_line = ema12 - ema26
+            signal_line = macd_line.ewm(span=9, adjust=False).mean()
+            
+            # RSI (Sobrevenda/Sobrecompra)
+            delta = fechamento.diff()
+            gain = delta.clip(lower=0).rolling(14).mean()
+            loss = -delta.clip(upper=0).rolling(14).mean()
+            rs = gain / loss
+            rsi_series = 100 - (100 / (1 + rs))
+            rsi = rsi_series.iloc[-1] if not np.isnan(rsi_series.iloc[-1]) else 50
+
+            # Volatilidade e Suportes
+            retornos = fechamento.pct_change().dropna()
+            volatilidade = retornos.std() * (252 ** 0.5) if not retornos.empty else 0.0
+            
+            media_vol_20 = volume.rolling(20).mean().iloc[-1]
+            vol_relativo = (volume.iloc[-1] / media_vol_20) if (media_vol_20 and media_vol_20 > 0) else 1.0
+
+            suporte = float(fechamento.tail(60).min())
+            resistencia = float(fechamento.tail(60).max())
+            stop_loss = suporte * 0.97
+            stop_gain = resistencia * 1.02
+
+            # --- CORREÇÃO DE DY (IMPORTANTE: LÓGICA V50.1 + TRAVA) ---
             dy_anual = 0.0
             try:
-                # 1. Tenta calcular somando os proventos reais (Mais preciso)
-                ticker_obj = yf.Ticker(ticker)
-                divs = ticker_obj.dividends
-                
+                # 1. Tenta calcular manualmente (Soma 12 meses)
+                t_obj = yf.Ticker(ticker)
+                divs = t_obj.dividends
                 if not divs.empty:
-                    # Pega data de hoje menos 1 ano
                     cutoff = pd.Timestamp.now(tz=divs.index.tz) - timedelta(days=365)
                     soma_12m = divs[divs.index >= cutoff].sum()
-                    
                     if preco_atual > 0:
                         dy_anual = (soma_12m / preco_atual) * 100
-            except:
-                pass
+            except: pass
 
-            # 2. Se o manual falhou (deu 0), usa o do Yahoo como Fallback
+            # 2. Fallback Yahoo
             if dy_anual == 0:
                 val = info.get("dividendYield", 0)
-                if val is not None:
-                    dy_anual = val * 100
+                if val is not None: dy_anual = val * 100
 
-            # --- TRAVA DE SANIDADE (CORREÇÃO DO ERRO 1214%) ---
-            # Se o DY for maior que 200% (impossível p/ BBSE3), assume erro de escala e divide por 100
-            if dy_anual > 200.0:
-                dy_anual = dy_anual / 100.0
+            # 3. Trava de Sanidade (Para evitar o erro do 1214%)
+            if dy_anual > 200.0: dy_anual = dy_anual / 100.0
 
-            # --- CORREÇÃO P/VP ---
+            # --- CORREÇÃO P/VP (FORÇA BRUTA) ---
             def safe_float(v): 
                 try: return float(v) 
                 except: return 0.0
@@ -62,10 +88,15 @@ class MotorAnalise:
             pvp = safe_float(info.get("priceToBook"))
             if pvp == 0 or pvp is None:
                 vpa = safe_float(info.get("bookValue"))
+                if vpa == 0: # Tentativa final pelo Balanço
+                    assets = safe_float(info.get("totalAssets"))
+                    shares = safe_float(info.get("sharesOutstanding"))
+                    if assets > 0 and shares > 0: vpa = assets/shares
+                
                 if vpa > 0: pvp = preco_atual / vpa
-                elif "11.SA" in ticker: pvp = 1.0 # Fallback FII
+                elif "11.SA" in ticker: pvp = 1.0
 
-            # --- VALUATION (BAZIN USA O DY CORRIGIDO) ---
+            # --- VALUATION (MISTO) ---
             div_reais = (dy_anual / 100) * preco_atual
             p_bazin = div_reais / 0.06 if div_reais > 0 else 0
             
@@ -73,6 +104,9 @@ class MotorAnalise:
             vpa = safe_float(info.get("bookValue"))
             p_graham = np.sqrt(22.5 * lpa * vpa) if (lpa>0 and vpa>0) else 0
             
+            # Gordon Simplificado (Crescimento de 3% a.a.)
+            p_gordon = (div_reais * 1.03) / (0.06 - 0.03) if div_reais > 0 else 0
+
             setor = self.identificar_setor(info, ticker)
             is_fii = "FII" in setor
             
@@ -81,38 +115,69 @@ class MotorAnalise:
                 validos = [x for x in [p_bazin, p_graham] if x > 0]
                 preco_justo = sum(validos)/len(validos) if validos else 0
 
-            # --- SCORE ---
+            # --- SCORE DUAL CORE (FII vs AÇÃO) ---
             score = 50
             motivos = []
+            alertas = []
             
-            # Médias Móveis para Tendência
-            mme9 = fechamento.ewm(span=9).mean().iloc[-1]
-            mme21 = fechamento.ewm(span=21).mean().iloc[-1]
-            tendencia = "ALTA" if mme9 > mme21 else "BAIXA"
+            vol_fin_medio = (fechamento * volume).tail(21).mean()
 
             if is_fii:
+                if vol_fin_medio < 300000: score -= 30; alertas.append("Baixa Liq.")
                 if 0.85 <= pvp <= 1.10: score += 20; motivos.append("P/VP Justo")
+                elif pvp > 1.15: score -= 15; alertas.append("Caro")
                 if dy_anual > 6.0: score += 15; motivos.append("Bom DY")
+                if volatilidade < 0.20: score += 10; motivos.append("Baixa Vol.")
             else:
-                if tendencia == "ALTA": score += 20; motivos.append("Tendência Alta")
-                if preco_justo > preco_atual: score += 20; motivos.append("Desconto Valuation")
+                if vol_fin_medio < 1000000: score -= 20; alertas.append("Baixa Liq.")
+                if mme9.iloc[-1] > mme21.iloc[-1]: score += 20; motivos.append("Tendência Alta")
+                else: score -= 15
+                if macd_line.iloc[-1] > signal_line.iloc[-1]: score += 10; motivos.append("MACD Compra")
+                if preco_justo > preco_atual: score += 15; motivos.append("Upside")
+
+            score = min(100, max(0, score))
 
             return {
                 "preco": preco_atual,
-                "score_ia": min(100, max(0, score)),
+                "score_ia": score,
                 "decisao_ia": "COMPRA" if score >= 60 else "AGUARDAR",
                 "motivos": ", ".join(motivos),
-                "dy_anual": dy_anual, # Agora vai correto
-                "p_bazin": p_bazin, "p_graham": p_graham, "p_gordon": p_bazin,
+                "alertas": ", ".join(alertas),
+                "dy_anual": dy_anual,
+                "p_bazin": p_bazin, "p_graham": p_graham, "p_gordon": p_gordon,
                 "preco_justo": preco_justo,
                 "pvp": pvp,
-                "sinal_tecnico": tendencia,
-                "status_macd": "NEUTRO", "stop_loss": 0, "stop_gain": 0, 
-                "rsi": 50, "volatilidade": 0, "vol_relativo": 1, "suporte": 0, "resistencia": 0
+                # Dados Técnicos para o App mostrar
+                "sinal_tecnico": "ALTA" if mme9.iloc[-1] > mme21.iloc[-1] else "BAIXA",
+                "status_macd": "COMPRA" if macd_line.iloc[-1] > signal_line.iloc[-1] else "VENDA",
+                "rsi": rsi,
+                "volatilidade": volatilidade,
+                "vol_relativo": vol_relativo,
+                "stop_loss": stop_loss,
+                "stop_gain": stop_gain,
+                "suporte": suporte,
+                "resistencia": resistencia
             }
 
         except Exception as e:
-            return None # Retorna None se falhar para não travar o app
+            return None 
 
-    def monte_carlo_carteira(self, r, v, a, anos=10, sims=100): return np.array([])
+    def monte_carlo_carteira(self, retornos, val_ini, aporte, anos=10, sims=1000):
+        # Versão simplificada para não travar, mas funcional
+        try:
+            days = anos * 252
+            r_mean = retornos.mean()
+            r_std = retornos.std()
+            res = []
+            for _ in range(sims):
+                path = [val_ini]
+                saldo = val_ini
+                daily_returns = np.random.normal(r_mean, r_std, days)
+                for d, r in enumerate(daily_returns):
+                    saldo = saldo * (1 + r)
+                    if (d+1) % 21 == 0: saldo += aporte
+                res.append(saldo)
+            return np.array(res)
+        except: return np.array([])
+    
     def consultar_dividendos(self, t): return {}
