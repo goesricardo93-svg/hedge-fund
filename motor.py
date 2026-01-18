@@ -3,77 +3,95 @@ import numpy as np
 
 class MotorAnalise:
     def analisar(self, hist, info, ticker):
-        if hist is None or hist.empty: return None
+        try:
+            if hist is None or hist.empty: return None
 
-        # --- DADOS ---
-        preco = hist["Close"].iloc[-1]
-        
-        # RSI (14)
-        delta = hist["Close"].diff()
-        gain = delta.clip(lower=0).rolling(14).mean()
-        loss = -delta.clip(upper=0).rolling(14).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs.iloc[-1]))
-        
-        # Volatilidade & Drawdown
-        vol = hist["Close"].pct_change().std() * np.sqrt(252)
-        topo = hist["Close"].cummax()
-        dd = ((hist["Close"] - topo) / topo).min() * 100
+            # DADOS
+            fechamento = hist["Close"]
+            # Garante Série unidimensional
+            if isinstance(fechamento, pd.DataFrame): fechamento = fechamento.iloc[:, 0]
+            
+            preco_atual = float(fechamento.iloc[-1])
+            
+            # TÉCNICA
+            delta = fechamento.diff()
+            gain = delta.clip(lower=0).rolling(14).mean()
+            loss = -delta.clip(upper=0).rolling(14).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs.iloc[-1]))
+            
+            retornos = fechamento.pct_change().dropna()
+            volatilidade = retornos.std() * (252 ** 0.5)
+            topo = fechamento.cummax()
+            drawdown = ((fechamento - topo) / topo).min() * 100
 
-        # Valuation
-        dy = info.get("dividendYield", 0) or 0
-        lpa = info.get("trailingEps", 0) or 0
-        vpa = info.get("bookValue", 0) or 0
-        
-        # Preços Justos
-        p_bazin = (preco * dy) / 0.06 if dy > 0 else 0
-        p_graham = (22.5 * lpa * vpa) ** 0.5 if (lpa > 0 and vpa > 0) else 0
-        
-        # Níveis Técnicos
-        window = 60
-        suporte = hist["Close"].tail(window).min()
-        resistencia = hist["Close"].tail(window).max()
+            window = 60 
+            suporte = float(fechamento.tail(window).min())
+            resistencia = float(fechamento.tail(window).max())
+            stop_loss = suporte * 0.97
+            stop_gain = resistencia * 1.02
 
-        # --- SCORE IA (0 a 100) ---
-        score = 50 # Neutro
-        motivos = []
+            # FUNDAMENTOS
+            dy = info.get("dividendYield", 0) or 0
+            lpa = info.get("trailingEps", 0) or 0
+            vpa = info.get("bookValue", 0) or 0
+            
+            # Preços Justos
+            dpa = preco_atual * dy
+            p_bazin = dpa / 0.06 if dpa > 0 else 0
+            p_graham = np.sqrt(22.5 * lpa * vpa) if (lpa > 0 and vpa > 0) else 0
+            p_gordon = p_bazin # Proxy
 
-        # Regras de Pontuação
-        if p_bazin > 0 and preco < p_bazin: 
-            score += 20; motivos.append("Abaixo do Teto Bazin")
-        if p_graham > 0 and preco < p_graham: 
-            score += 20; motivos.append("Abaixo do Valor Graham")
-        if dy > 0.06: 
-            score += 10; motivos.append("Dividendos Atrativos")
-        if rsi < 30: 
-            score += 20; motivos.append("RSI Sobrevendido")
-        elif rsi > 70: 
-            score -= 20; motivos.append("RSI Esticado")
-        
-        if preco <= suporte * 1.03:
-            score += 10; motivos.append("Próximo ao Suporte")
+            # SCORE IA
+            score = 50
+            motivos = []
 
-        score = min(100, max(0, score))
+            if p_bazin > 0 and preco_atual < p_bazin: score += 20; motivos.append("Desconto Bazin")
+            if p_graham > 0 and preco_atual < p_graham: score += 20; motivos.append("Desconto Graham")
+            if dy > 0.06: score += 10; motivos.append("Dividendos > 6%")
 
-        # Decisão Objetiva
-        if score >= 75: decisao = "🟢 COMPRA FORTE"
-        elif score >= 60: decisao = "🔵 COMPRA"
-        elif score <= 30: decisao = "🔴 VENDA"
-        else: decisao = "⚪ MANTER"
+            if rsi < 30: score += 20; motivos.append("RSI Sobrevendido")
+            elif rsi > 70: score -= 20; motivos.append("RSI Sobrecomprado")
+            
+            score = min(100, max(0, score))
 
-        # Retorna dicionário simples (Serializável)
-        return {
-            "preco": preco,
-            "rsi": rsi,
-            "volatilidade": vol,
-            "drawdown": dd,
-            "dy": dy,
-            "p_bazin": p_bazin,
-            "p_graham": p_graham,
-            "suporte": suporte,
-            "stop_loss": suporte * 0.95,
-            "stop_gain": resistencia * 1.05,
-            "score_ia": score,
-            "decisao_ia": decisao,
-            "motivos": ", ".join(motivos)
-        }
+            if score >= 75: decisao = "🟢🟢 COMPRA FORTE"
+            elif score >= 60: decisao = "🟢 COMPRA"
+            elif score <= 30: decisao = "🔴 VENDA"
+            else: decisao = "⚪ MANTER"
+
+            return {
+                "preco": preco_atual,
+                "rsi": rsi,
+                "volatilidade": volatilidade,
+                "drawdown": drawdown,
+                "p_bazin": p_bazin,
+                "p_graham": p_graham,
+                "p_gordon": p_gordon,
+                "dy": dy,
+                "suporte": suporte,
+                "resistencia": resistencia,
+                "stop_loss": stop_loss,
+                "stop_gain": stop_gain,
+                "score_ia": score,
+                "decisao_ia": decisao,
+                "motivos": ", ".join(motivos),
+                "pl": info.get("trailingPE", 0) or 0,
+                "pvp": info.get("priceToBook", 0) or 0,
+                "roe": info.get("returnOnEquity", 0) or 0,
+                "margem": info.get("profitMargins", 0) or 0,
+                "divida_ebitda": info.get("debtToEbitda", 0) or 0
+            }
+        except Exception:
+            return None
+
+    def monte_carlo(self, patrimonio_atual, aporte_mensal, anos=10, sims=1000):
+        meses = anos * 12
+        resultados = []
+        mu, sigma = 0.008, 0.05
+        for _ in range(sims):
+            pat = patrimonio_atual
+            for _ in range(meses):
+                pat = pat * (1 + np.random.normal(mu, sigma)) + aporte_mensal
+            resultados.append(pat)
+        return np.array(resultados)

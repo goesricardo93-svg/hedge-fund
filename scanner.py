@@ -1,32 +1,70 @@
 import pandas as pd
 
-def processar_ranking_acoes(motor, lista_tickers, cache_func):
-    """Gera ranking usando o motor e cache do app."""
-    dados = []
-    for t in lista_tickers:
-        # Aqui usamos uma função de callback para pegar dados cacheados do app.py
-        # Se não for possível, teria que chamar yfinance aqui, o que seria lento sem cache.
-        # Vamos assumir que o app.py passará os dados já processados ou faremos download aqui.
-        pass 
-    return pd.DataFrame()
-
 def scanner_fiis_csv(uploaded_file):
     try:
         df = pd.read_csv(uploaded_file, sep=";", encoding="latin-1")
         
-        cols = ["DY", "P/VP", "VACÂNCIA FISICA", "LIQUIDEZ MEDIA DIARIA"]
-        for c in cols:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c].astype(str).str.replace("%","").str.replace(".","").str.replace(",","."), errors='coerce')
+        def limpar_numero(x):
+            if isinstance(x, str):
+                x = x.replace('%', '').replace('.', '').replace(',', '.')
+                try: return float(x)
+                except: return 0.0
+            return x
 
-        # Score IA para FIIs
-        df["Score"] = 0
-        df.loc[df["DY"] > 8, "Score"] += 30
-        df.loc[(df["P/VP"] > 0.8) & (df["P/VP"] < 1.05), "Score"] += 30
-        df.loc[df["VACÂNCIA FISICA"] < 5, "Score"] += 20
-        df.loc[df["LIQUIDEZ MEDIA DIARIA"] > 1000000, "Score"] += 20
+        mapa = {c.upper().strip(): c for c in df.columns}
         
-        df = df.sort_values("Score", ascending=False)
-        return df
+        col_dy = mapa.get("DY") or mapa.get("DIVIDEND YIELD")
+        col_pvp = mapa.get("P/VP")
+        col_vac = mapa.get("VACANCIA FISICA") or mapa.get("VACÂNCIA FÍSICA")
+        col_liq = mapa.get("LIQUIDEZ MEDIA DIARIA")
+        col_ticker = mapa.get("TICKER") or mapa.get("ATIVO")
+        col_preco = mapa.get("PRECO") or mapa.get("PREÇO") or mapa.get("COTACAO")
+        col_seg = mapa.get("SEGMENTO")
+
+        if not (col_dy and col_pvp and col_ticker): return pd.DataFrame()
+
+        df["DY_N"] = df[col_dy].apply(limpar_numero)
+        df["PVP_N"] = df[col_pvp].apply(limpar_numero)
+        df["VAC_N"] = df[col_vac].apply(limpar_numero) if col_vac else 0
+        df["LIQ_N"] = df[col_liq].apply(limpar_numero) if col_liq else 0
+        
+        # Lógica "Análise 360"
+        def analise_360_fii(row):
+            p_vp = row["PVP_N"]
+            vac = row["VAC_N"]
+            seg = str(row[col_seg]).upper() if col_seg else ""
+            
+            if "PAPEL" in seg or "RECEB" in seg:
+                if 0.90 <= p_vp <= 1.02: return "🔥 COMPRA (Papel)"
+                return "⚪ OBSERVAR"
+            
+            if vac < 10 and p_vp < 0.95: return "🏢 OPORTUNIDADE (Tijolo)"
+            if vac > 15: return "🔴 CUIDADO (Vacância)"
+            
+            if 0.85 <= p_vp <= 1.0: return "✅ VALOR JUSTO"
+            return "⚪ NEUTRO"
+
+        df["Veredito 360"] = df.apply(analise_360_fii, axis=1)
+
+        def calc_score(row):
+            s = 50
+            if row["DY_N"] > 9: s += 20
+            elif row["DY_N"] > 6: s += 10
+            
+            if 0.85 <= row["PVP_N"] <= 1.0: s += 20
+            if row["LIQ_N"] > 1000000: s += 10
+            
+            if row["VAC_N"] > 10: s -= 20
+            if row["PVP_N"] > 1.15: s -= 15
+            
+            return min(100, max(0, s))
+
+        df["Score"] = df.apply(calc_score, axis=1)
+        
+        cols_final = [col_ticker, col_preco, col_dy, col_pvp, "Score", "Veredito 360"]
+        if col_vac: cols_final.append(col_vac)
+        
+        return df[cols_final].sort_values("Score", ascending=False)
+            
     except:
         return pd.DataFrame()
