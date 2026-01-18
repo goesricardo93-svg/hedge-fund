@@ -18,13 +18,13 @@ except ImportError as e:
     st.error(f"Erro Crítico: Faltam arquivos modulares ({e}).")
     st.stop()
 
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 34.0 (Monte Carlo Fix)", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 35.0 (Rebalance Fix)", layout="wide")
 
 # ======================================================
 # CACHE E FUNÇÕES
 # ======================================================
 @st.cache_data(ttl=3600)
-def obter_dados_v34(ticker):
+def obter_dados_v35(ticker):
     try:
         t = yf.Ticker(ticker)
         hist = t.history(period="2y")
@@ -32,20 +32,12 @@ def obter_dados_v34(ticker):
         return MotorAnalise().analisar(hist, t.info, ticker)
     except: return None
 
-# --- CORREÇÃO DO DOWNLOAD HISTÓRICO ---
 @st.cache_data(ttl=86400)
 def download_historico_longo(tickers):
-    # O yfinance agora retorna MultiIndex se mais de 1 ticker
     data = yf.download(tickers, period="5y", progress=False)
-    
-    # Tenta pegar Adj Close, se não der pega Close
-    if "Adj Close" in data:
-        return data["Adj Close"]
-    elif "Close" in data:
-        return data["Close"]
-    else:
-        # Se for um único ticker e não tiver hierarquia de colunas
-        return data
+    if "Adj Close" in data: return data["Adj Close"]
+    elif "Close" in data: return data["Close"]
+    else: return data
 
 def formatar_ticker(ticker):
     t = ticker.strip().upper()
@@ -54,7 +46,7 @@ def formatar_ticker(ticker):
     return t
 
 # ======================================================
-# SESSION STATE (CARTEIRA 31 ATIVOS)
+# SESSION STATE
 # ======================================================
 if "carteira_acoes" not in st.session_state:
     dados = [
@@ -98,7 +90,7 @@ tabs = st.tabs(["🔎 Análise", "💼 Carteira", "🏢 FIIs 360", "🛡️ RF &
 # --- ABA 1: ANÁLISE ---
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
-    r = obter_dados_v34(ticker_input)
+    r = obter_dados_v35(ticker_input)
     
     if r:
         col_ia1, col_ia2 = st.columns([1, 3])
@@ -110,19 +102,18 @@ with tabs[0]:
         st.write(f"**Gatilhos:** {r['motivos']}")
         st.divider()
 
-        # Falta o método consultar_dividendos no motor.py novo, então comentamos ou adicionamos lá se precisar.
-        # Assumindo que você quer focar no problema do Monte Carlo agora.
+        div_info = MotorAnalise().consultar_dividendos(ticker_input)
         
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Preço Atual", f"R$ {r['preco']:.2f}")
         c2.metric("Teto (Alvo IA)", f"R$ {r['stop_gain']:.2f}")
         c3.metric("RSI", f"{r['rsi']:.0f}")
-        c4.metric("Volatilidade", f"{r['volatilidade']*100:.1f}%")
+        c4.metric(f"Proventos ({div_info['status']})", f"{div_info['valor']}")
 
         c_val, c_fund = st.columns(2)
         with c_val:
             st.subheader("📋 Valuation")
-            val_data = {"Modelo": ["Bazin", "Graham", "Gordon"], "Preço Justo": [f"R$ {r['p_bazin']:.2f}", f"R$ {r['p_graham']:.2f}", f"R$ {r['p_gordon']:.2f}"]}
+            val_data = {"Modelo": ["Bazin (Div)", "Graham (Patr)", "Gordon (Cresc)"], "Preço Justo": [f"R$ {r['p_bazin']:.2f}", f"R$ {r['p_graham']:.2f}", f"R$ {r['p_gordon']:.2f}"]}
             st.dataframe(pd.DataFrame(val_data), use_container_width=True)
         with c_fund:
             st.subheader("📊 Fundamentos")
@@ -133,7 +124,6 @@ with tabs[0]:
         try:
             hist_chart = yf.download(ticker_input, period="2y", progress=False)
             if not hist_chart.empty:
-                # Tratamento de dados robusto para gráfico
                 close = hist_chart["Close"] if "Close" in hist_chart else hist_chart.iloc[:,0]
                 if isinstance(close, pd.DataFrame): close = close.iloc[:,0]
                 
@@ -147,7 +137,7 @@ with tabs[0]:
         except Exception as e: st.error(f"Erro gráfico: {e}")
     else: st.warning("Ticker não encontrado.")
 
-# --- ABA 2: CARTEIRA ---
+# --- ABA 2: CARTEIRA (CORRIGIDA) ---
 with tabs[1]:
     st.subheader(f"💼 Gestão de Carteira ({len(st.session_state.carteira_acoes)} Ativos)")
     df_ed = st.data_editor(st.session_state.carteira_acoes, num_rows="dynamic", use_container_width=True)
@@ -159,24 +149,57 @@ with tabs[1]:
     if st.button("🔄 Analisar e Rebalancear"):
         res = []
         bar = st.progress(0)
+        total_ativos = len(df_ed)
         for i, row in df_ed.iterrows():
-            r = obter_dados_v34(row["Ticker"])
+            r = obter_dados_v35(row["Ticker"])
             if r:
                 rec = r['decisao_ia']
                 if r['preco'] < row['PM'] * 0.95 and "COMPRA" in rec: rec = "🔥 COMPRA FORTE (Abaixo PM)"
+                
+                # Alerta
                 if r['score_ia'] >= 80 and row["Ticker"] not in st.session_state.alertas_enviados:
                     disparar_alerta(f"TOP PICK: {row['Ticker']}", f"Score: {r['score_ia']}")
                     st.session_state.alertas_enviados.add(row["Ticker"])
-                res.append({"Ticker": row["Ticker"], "Preço": r["preco"], "PM": row["PM"], "Qtd": row["Qtd"], "Valor_Atual": row["Qtd"] * r["preco"], "Lucro": (r["preco"] - row["PM"]) * row["Qtd"], "Veredito IA": rec, "Score": r['score_ia'], "DY": f"{r['dy']*100:.2f}%"})
-            bar.progress((i+1)/len(df_ed))
+                
+                res.append({
+                    "Ticker": row["Ticker"],
+                    "Preço": r["preco"],
+                    "PM": row["PM"],
+                    "Qtd": row["Qtd"],
+                    "Valor_Atual": row["Qtd"] * r["preco"],
+                    "Lucro": (r["preco"] - row["PM"]) * row["Qtd"],
+                    "Veredito IA": rec,
+                    "Score": r['score_ia'],
+                    "DY": f"{r['dy']*100:.2f}%"
+                })
+            bar.progress((i+1)/total_ativos)
         
         if res:
             df_res = pd.DataFrame(res)
             st.session_state.df_analisado = df_res 
+            
+            # Chama o rebalanceamento
             df_final = rebalancear_e_aportar(df_res, aporte_user)
-            st.success("✅ Rebalanceamento Concluído!")
-            def cor_lucro(val): return 'color: green' if val > 0 else 'color: red'
-            st.dataframe(df_final[["Ticker", "Score", "Valor_Atual", "Lucro", "Veredito IA", "Aporte Sugerido (R$)"]].style.applymap(cor_lucro, subset=["Lucro"]).format({"Valor_Atual": "R$ {:.2f}", "Lucro": "R$ {:.2f}", "Aporte Sugerido (R$)": "R$ {:.2f}"}).background_gradient(subset=["Aporte Sugerido (R$)"], cmap="Greens"), use_container_width=True)
+            
+            if not df_final.empty:
+                st.success("✅ Rebalanceamento Concluído!")
+                
+                # Seleção segura de colunas
+                cols_to_show = ["Ticker", "Score", "Valor_Atual", "Lucro", "Veredito IA", "Aporte Sugerido (R$)"]
+                # Filtra apenas as colunas que realmente existem no DataFrame final
+                cols_to_show = [c for c in cols_to_show if c in df_final.columns]
+                
+                def cor_lucro(val): return 'color: green' if val > 0 else 'color: red'
+                
+                st.dataframe(
+                    df_final[cols_to_show]
+                    .style.applymap(cor_lucro, subset=["Lucro"] if "Lucro" in df_final.columns else None)
+                    .format({"Valor_Atual": "R$ {:.2f}", "Lucro": "R$ {:.2f}", "Aporte Sugerido (R$)": "R$ {:.2f}"})
+                    .background_gradient(subset=["Aporte Sugerido (R$)"], cmap="Greens"),
+                    use_container_width=True
+                )
+            else:
+                st.warning("Não foi possível calcular o rebalanceamento. Verifique se os dados da carteira estão corretos.")
 
 # --- ABA 3: FIIs 360 ---
 with tabs[2]:
@@ -203,7 +226,7 @@ with tabs[3]:
     st.metric("Total em Renda Fixa", f"R$ {df_rf['Saldo Atual'].sum():,.2f}")
     st.plotly_chart(go.Figure(data=[go.Pie(labels=df_rf["Ativo"], values=df_rf["Saldo Atual"], hole=.4)]), use_container_width=True)
 
-# --- ABA 5: FUTURO (CORRIGIDO ERRO 'ADJ CLOSE') ---
+# --- ABA 5: FUTURO ---
 with tabs[4]:
     st.subheader("🔮 Simulação Patrimonial (Monte Carlo Real)")
     
@@ -217,9 +240,7 @@ with tabs[4]:
     real_rf = st.session_state.carteira_rf["Saldo Atual"].sum()
     real_total = real_acoes + real_rf
     
-    st.markdown("### ⚙️ Parâmetros da Simulação")
     col_input1, col_input2 = st.columns(2)
-    
     with col_input1:
         sim_inicial = st.number_input("💰 Patrimônio Inicial (Simulado)", value=float(real_total), step=1000.0)
     with col_input2:
@@ -228,48 +249,24 @@ with tabs[4]:
     if st.button("Simular 10 Anos"):
         tickers = df_ed["Ticker"].tolist()
         try:
-            # Baixa histórico real ajustado
             hist = download_historico_longo(tickers)
-            
-            # --- CORREÇÃO DO ERRO 'Adj Close' ---
-            # Se vier um DataFrame simples (1 ativo), não tem Adj Close como chave
-            # Se vier MultiIndex, o yfinance organiza diferente agora.
-            # O download_historico_longo já foi ajustado para retornar apenas a tabela de preços limpa.
-            
-            # Cálculo dos retornos diários
-            retornos_diarios = hist.pct_change().dropna()
-            
-            # Cria um índice sintético da carteira (Média simples dos retornos diários)
-            # Para refinar, poderia usar média ponderada pelos pesos atuais, mas média simples é robusta.
-            retorno_carteira_indice = retornos_diarios.mean(axis=1)
+            retornos_diarios = hist.pct_change().dropna().mean(axis=1)
             
             motor = MotorAnalise()
-            
-            # Proporção Risco vs RF
             prop_risco = 1.0 if real_total == 0 else real_acoes / real_total
             
             sim_start_risco = sim_inicial * prop_risco
             sim_start_rf = sim_inicial * (1 - prop_risco)
             
-            # Simula a parte de risco
-            sims_risco = motor.monte_carlo_carteira(
-                retorno_carteira_indice, 
-                sim_start_risco, 
-                sim_aporte * prop_risco,
-                10, 
-                1000
-            )
+            sims_risco = motor.monte_carlo_carteira(retornos_diarios, sim_start_risco, sim_aporte * prop_risco, 10, 1000)
             
-            # Projeta a RF (Deterministicamente)
             meses = 120
             taxa_mensal_rf = 0.008 
-            
             rf_futuro_base = sim_start_rf * ((1 + taxa_mensal_rf) ** meses)
             aporte_rf = sim_aporte * (1 - prop_risco)
             rf_futuro_aportes = aporte_rf * (((1 + taxa_mensal_rf) ** meses - 1) / taxa_mensal_rf)
             rf_futuro_total = rf_futuro_base + rf_futuro_aportes
             
-            # Soma
             sims_total = sims_risco + rf_futuro_total
             
             st.plotly_chart(go.Figure(go.Histogram(x=sims_total, nbinsx=50, marker_color='green')), use_container_width=True)
