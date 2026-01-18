@@ -11,7 +11,7 @@ from email.mime.text import MIMEText
 # ======================================================
 # 1. CONFIGURAÇÕES & SEGREDOS
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 9.1", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 10.0", layout="wide")
 
 try:
     TELEGRAM_TOKEN = st.secrets["telegram"]["token"]
@@ -36,9 +36,10 @@ class MotorAnalise:
             if hist is None or hist.empty: return None
 
             # --- DADOS DE PREÇO ---
+            # Garante série unidimensional
             fechamento = hist["Close"]
             if isinstance(fechamento, pd.DataFrame): fechamento = fechamento.iloc[:, 0]
-            preco_atual = fechamento.iloc[-1]
+            preco_atual = float(fechamento.iloc[-1])
             
             # --- TÉCNICA ---
             # RSI
@@ -54,14 +55,15 @@ class MotorAnalise:
             topo = fechamento.cummax()
             drawdown = ((fechamento - topo) / topo).min() * 100
 
-            # Suporte/Resistência (60 dias)
-            suporte = fechamento.tail(60).min()
-            resistencia = fechamento.tail(60).max()
+            # Níveis Técnicos
+            window = 60 
+            suporte = float(fechamento.tail(window).min())
+            resistencia = float(fechamento.tail(window).max())
             stop_loss = suporte * 0.97
             stop_gain = resistencia * 1.02
 
             # --- FUNDAMENTOS (VALUATION) ---
-            # Uso de .get() com valor padrão 0 para evitar KeyError
+            # .get() com valor 0 evita quebras se a API falhar
             dy = info.get("dividendYield", 0) or 0
             lpa = info.get("trailingEps", 0) or 0
             vpa = info.get("bookValue", 0) or 0
@@ -71,22 +73,25 @@ class MotorAnalise:
             margem = info.get("profitMargins", 0) or 0
             divida_ebitda = info.get("debtToEbitda", 0) or 0
             
-            # Fórmulas de Preço Justo
+            # Valuation
             dpa = preco_atual * dy
             p_bazin = dpa / 0.06 if dpa > 0 else 0
             p_graham = np.sqrt(22.5 * lpa * vpa) if (lpa > 0 and vpa > 0) else 0
             p_gordon = p_bazin # Proxy
 
-            # --- IA DE DECISÃO (SCORE) ---
+            # --- SCORE IA (0-100) ---
             score = 50
             motivos = []
 
+            # Fundamentalista
             if p_bazin > 0 and preco_atual < p_bazin: score += 20; motivos.append("Desconto Bazin")
             if p_graham > 0 and preco_atual < p_graham: score += 20; motivos.append("Desconto Graham")
-            if dy > 0.06: score += 10; motivos.append("Dividendos Altos")
+            if dy > 0.06: score += 10; motivos.append("Dividendos > 6%")
+
+            # Técnico
             if rsi < 30: score += 20; motivos.append("RSI Sobrevendido")
-            if rsi > 70: score -= 20; motivos.append("RSI Sobrecomprado")
-            if preco_atual > resistencia: score -= 10; motivos.append("Topo Histórico")
+            elif rsi > 70: score -= 20; motivos.append("RSI Sobrecomprado")
+            if preco_atual <= suporte * 1.03: score += 10; motivos.append("Em Suporte")
 
             score = min(100, max(0, score))
 
@@ -95,7 +100,7 @@ class MotorAnalise:
             elif score <= 30: decisao = "🔴 VENDA"
             else: decisao = "⚪ MANTER"
 
-            # RETORNO COMPLETO (SOLUÇÃO DO KEYERROR)
+            # RETORNO GARANTIDO (Todas as chaves existem)
             return {
                 "preco": preco_atual,
                 "rsi": rsi,
@@ -106,8 +111,8 @@ class MotorAnalise:
                 "p_gordon": p_gordon,
                 "dy": dy,
                 "roe": roe,
-                "pl": pl,    # Garante que 'pl' existe
-                "pvp": pvp,  # Garante que 'pvp' existe
+                "pl": pl,
+                "pvp": pvp,
                 "margem": margem,
                 "divida_ebitda": divida_ebitda,
                 "suporte": suporte,
@@ -119,8 +124,7 @@ class MotorAnalise:
                 "motivos": ", ".join(motivos)
             }
         except Exception as e:
-            # Em caso de erro grave, retorna None
-            print(f"Erro Motor: {e}")
+            print(f"Erro Motor ({ticker}): {e}")
             return None
 
     def monte_carlo(self, patrimonio_atual, aporte_mensal, anos=10, sims=1000):
@@ -159,8 +163,9 @@ def disparar_alerta(titulo, corpo):
         )
     except: pass
 
+# MUDAMOS O NOME DA FUNÇÃO PARA FORÇAR LIMPEZA DE CACHE
 @st.cache_data(ttl=3600)
-def obter_dados(ticker):
+def obter_dados_seguros(ticker):
     try:
         t = yf.Ticker(ticker)
         hist = t.history(period="2y")
@@ -244,89 +249,85 @@ if "alertas_enviados" not in st.session_state:
     st.session_state.alertas_enviados = set()
 
 # ======================================================
-# 5. INTERFACE (O APP)
+# 5. INTERFACE (FRONTEND)
 # ======================================================
 st.sidebar.title("📊 Hedge Fund Ricardo")
 
-# --- SIDEBAR: METAS ---
+# Sidebar Metas
 st.sidebar.markdown("---")
 st.sidebar.subheader("🎯 Metas por Setor (%)")
-df_metas = st.sidebar.data_editor(
-    st.session_state.metas_setor,
-    num_rows="dynamic",
-    key="editor_metas_sidebar"
-)
+df_metas = st.sidebar.data_editor(st.session_state.metas_setor, num_rows="dynamic", key="meta_ed")
 st.session_state.metas_setor = df_metas
 
-soma_metas = df_metas["Meta"].sum()
-if abs(soma_metas - 1.0) > 0.01:
-    st.sidebar.warning(f"⚠️ Soma: {soma_metas*100:.0f}% (Ideal: 100%)")
+soma = df_metas["Meta"].sum()
+if abs(soma - 1.0) > 0.01:
+    st.sidebar.warning(f"⚠️ Soma: {soma*100:.0f}% (Ideal: 100%)")
 else:
-    st.sidebar.success("✅ Metas Balanceadas")
+    st.sidebar.success("✅ Metas OK")
 
 st.sidebar.markdown("---")
 ticker_input = st.sidebar.text_input("🔍 Analisar Ticker:", "BBAS3.SA").upper()
 
 tabs = st.tabs(["🔎 Análise Completa", "💼 Carteira & Ranking", "🏢 Scanner FIIs", "💰 Futuro (Monte Carlo)"])
 
-# --- ABA 1: ANÁLISE TÉCNICA E FUNDAMENTALISTA ---
+# --- ABA 1: ANÁLISE ---
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
-    r = obter_dados(ticker_input)
+    # Chama a NOVA função de cache para evitar erro antigo
+    r = obter_dados_seguros(ticker_input)
     
     if r:
-        # 1. PAINEL DE INTELIGÊNCIA ARTIFICIAL
+        # 1. PAINEL IA
         st.info("🧠 **Análise da Inteligência Artificial**")
-        col_ia1, col_ia2 = st.columns([1, 3])
-        col_ia1.metric("Score IA", f"{r['score_ia']}/100")
+        c1, c2 = st.columns([1, 3])
+        c1.metric("Score IA", f"{r.get('score_ia', 0)}/100")
         
-        if "COMPRA" in r['decisao_ia']:
-            col_ia2.success(f"### {r['decisao_ia']}")
-        elif "VENDA" in r['decisao_ia']:
-            col_ia2.error(f"### {r['decisao_ia']}")
-        else:
-            col_ia2.warning(f"### {r['decisao_ia']}")
+        decisao = r.get('decisao_ia', "Neutro")
+        if "COMPRA" in decisao: c2.success(f"### {decisao}")
+        elif "VENDA" in decisao: c2.error(f"### {decisao}")
+        else: c2.warning(f"### {decisao}")
         
-        st.write(f"**Gatilhos:** {r['motivos']}")
+        st.write(f"**Gatilhos:** {r.get('motivos', '')}")
         st.divider()
 
-        # 2. MÉTRICAS DE PREÇO E RISCO
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Preço Atual", f"R$ {r['preco']:.2f}")
-        c2.metric("Volatilidade", f"{r['volatilidade']*100:.1f}%")
-        c3.metric("Drawdown Max", f"{r['drawdown']:.1f}%", delta_color="inverse")
-        c4.markdown(f"**{get_rsi_status(r['rsi'])}**")
+        # 2. MÉTRICAS
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Preço Atual", f"R$ {r['preco']:.2f}")
+        k2.metric("Volatilidade", f"{r['volatilidade']*100:.1f}%")
+        k3.metric("Drawdown", f"{r['drawdown']:.1f}%", delta_color="inverse")
+        k4.markdown(f"**{get_rsi_status(r['rsi'])}**")
 
-        # 3. TABELA DE VALUATION COMPLETA
+        # 3. TABELA VALUATION (COM PROTEÇÃO .get)
         st.subheader("📋 Valuation: O Preço é Justo?")
         val_data = {
             "Modelo": ["Decio Bazin (Div.)", "Ben. Graham (Patr.)", "Gordon (Cresc.)"],
             "Preço Justo": [f"R$ {r['p_bazin']:.2f}", f"R$ {r['p_graham']:.2f}", f"R$ {r['p_gordon']:.2f}"],
-            "Margem de Segurança": [
-                f"{(r['p_bazin']/r['preco'] - 1)*100:.1f}%" if r['p_bazin'] > 0 else "N/A",
-                f"{(r['p_graham']/r['preco'] - 1)*100:.1f}%" if r['p_graham'] > 0 else "N/A",
-                f"{(r['p_gordon']/r['preco'] - 1)*100:.1f}%" if r['p_gordon'] > 0 else "N/A"
+            "Margem": [
+                f"{(r['p_bazin']/r['preco'] - 1)*100:.1f}%" if r['p_bazin'] > 0 else "-",
+                f"{(r['p_graham']/r['preco'] - 1)*100:.1f}%" if r['p_graham'] > 0 else "-",
+                f"{(r['p_gordon']/r['preco'] - 1)*100:.1f}%" if r['p_gordon'] > 0 else "-"
             ]
         }
         st.dataframe(pd.DataFrame(val_data), use_container_width=True)
 
-        # 4. TABELA DE FUNDAMENTOS ADICIONAIS (SOLUÇÃO DO KEYERROR)
+        # 4. TABELA FUNDAMENTOS (ONDE DAVA O ERRO KEYERROR)
         st.subheader("📊 Indicadores Fundamentalistas")
+        # Usamos .get() para garantir que nunca quebre
         fund_data = {
-            "Indicador": ["DY (%)", "P/L", "P/VP", "ROE (%)", "Margem Líquida (%)", "Dívida/EBITDA"],
+            "Indicador": ["DY (%)", "P/L", "P/VP", "ROE (%)", "Margem (%)", "Dívida/EBITDA"],
             "Valor": [
-                f"{r['dy']*100:.2f}%", 
-                f"{r['pl']:.2f}", 
-                f"{r['pvp']:.2f}", 
-                f"{r['roe']*100:.1f}%", 
-                f"{r['margem']*100:.1f}%", 
-                f"{r['divida_ebitda']:.2f}"
+                f"{r.get('dy', 0)*100:.2f}%", 
+                f"{r.get('pl', 0):.2f}", 
+                f"{r.get('pvp', 0):.2f}", 
+                f"{r.get('roe', 0)*100:.1f}%", 
+                f"{r.get('margem', 0)*100:.1f}%", 
+                f"{r.get('divida_ebitda', 0):.2f}"
             ]
         }
         st.table(pd.DataFrame(fund_data).T)
 
-        # 5. GRÁFICO TÉCNICO COMPLETO
-        st.subheader("📈 Análise Gráfica (Setup)")
+        # 5. GRÁFICO
+        st.subheader("📈 Análise Gráfica")
         try:
             hist_chart = yf.download(ticker_input, period="2y", progress=False)
             if not hist_chart.empty:
@@ -337,35 +338,32 @@ with tabs[0]:
                 mm50 = fechamento.rolling(50).mean()
 
                 fig = go.Figure()
-                fig.add_trace(go.Candlestick(
-                    x=hist_chart.index,
-                    open=hist_chart["Open"] if "Open" in hist_chart else hist_chart.iloc[:,0],
-                    high=hist_chart["High"] if "High" in hist_chart else hist_chart.iloc[:,1],
-                    low=hist_chart["Low"] if "Low" in hist_chart else hist_chart.iloc[:,2],
-                    close=fechamento,
-                    name="Preço"
-                ))
-
-                fig.add_trace(go.Scatter(x=hist_chart.index, y=mm20, name="MM20", line=dict(color='orange', width=1)))
-                fig.add_trace(go.Scatter(x=hist_chart.index, y=mm50, name="MM50", line=dict(color='blue', width=1)))
+                fig.add_trace(go.Candlestick(x=hist_chart.index, open=hist_chart["Open"] if "Open" in hist_chart else hist_chart.iloc[:,0],
+                                            high=hist_chart["High"] if "High" in hist_chart else hist_chart.iloc[:,1],
+                                            low=hist_chart["Low"] if "Low" in hist_chart else hist_chart.iloc[:,2],
+                                            close=fechamento, name="Preço"))
                 
-                fig.add_hline(y=r['suporte'], line_dash="dot", line_color="green", annotation_text=f"SUPORTE {r['suporte']:.2f}")
-                fig.add_hline(y=r['resistencia'], line_dash="dot", line_color="red", annotation_text=f"RESISTÊNCIA {r['resistencia']:.2f}")
-                fig.add_hline(y=r['stop_loss'], line_dash="dash", line_color="red", annotation_text=f"STOP LOSS {r['stop_loss']:.2f}")
-                fig.add_hline(y=r['stop_gain'], line_dash="dash", line_color="gold", annotation_text=f"ALVO {r['stop_gain']:.2f}")
+                fig.add_trace(go.Scatter(x=hist_chart.index, y=mm20, name="MM20", line=dict(color='orange')))
+                fig.add_trace(go.Scatter(x=hist_chart.index, y=mm50, name="MM50", line=dict(color='blue')))
+                
+                fig.add_hline(y=r['suporte'], line_dash="dot", line_color="green", annotation_text="SUPORTE")
+                fig.add_hline(y=r['resistencia'], line_dash="dot", line_color="red", annotation_text="RESISTÊNCIA")
+                fig.add_hline(y=r['stop_loss'], line_dash="dash", line_color="red", annotation_text="STOP LOSS")
+                fig.add_hline(y=r['stop_gain'], line_dash="dash", line_color="gold", annotation_text="ALVO")
 
-                fig.update_layout(height=600, xaxis_rangeslider_visible=False, template="plotly_white", title=f"Setup Técnico: {ticker_input}")
+                fig.update_layout(height=600, xaxis_rangeslider_visible=False, template="plotly_white")
                 st.plotly_chart(fig, use_container_width=True)
                 
-        except Exception as e:
-            st.error(f"Erro ao gerar gráfico: {e}")
+                st.info(f"**Setup Técnico:** Suporte R$ {r['suporte']:.2f} | Resistência R$ {r['resistencia']:.2f} | Stop R$ {r['stop_loss']:.2f} | Alvo R$ {r['stop_gain']:.2f}")
+
+        except Exception as e: st.error(f"Erro gráfico: {e}")
 
     else:
-        st.warning("Ticker não encontrado ou erro na API.")
+        st.warning("Ticker não encontrado.")
 
-# --- ABA 2: CARTEIRA E RANKING ---
+# --- ABA 2: CARTEIRA ---
 with tabs[1]:
-    st.subheader("🏆 Ranking Automático da Carteira")
+    st.subheader("🏆 Ranking Automático")
     df_ed = st.data_editor(st.session_state.carteira_acoes, num_rows="dynamic", use_container_width=True)
     st.session_state.carteira_acoes = df_ed
 
@@ -374,12 +372,12 @@ with tabs[1]:
         bar = st.progress(0)
         total = len(df_ed)
         for i, row in df_ed.iterrows():
-            r = obter_dados(row["Ticker"])
+            r = obter_dados_seguros(row["Ticker"])
             if r:
                 if r['score_ia'] >= 75 and row["Ticker"] not in st.session_state.alertas_enviados:
-                    disparar_alerta(f"TOP PICK: {row['Ticker']}", f"Score: {r['score_ia']}\nPreço: {r['preco']:.2f}\nBazin: {r['p_bazin']:.2f}")
+                    disparar_alerta(f"TOP PICK: {row['Ticker']}", f"Score: {r['score_ia']}\nPreço: {r['preco']:.2f}")
                     st.session_state.alertas_enviados.add(row["Ticker"])
-                    st.toast(f"Alerta enviado: {row['Ticker']}")
+                    st.toast(f"Alerta: {row['Ticker']}")
 
                 res.append({
                     "Ticker": row["Ticker"],
@@ -396,16 +394,15 @@ with tabs[1]:
         st.dataframe(df_rank.style.background_gradient(subset=["Score IA"], cmap="Greens"), use_container_width=True)
         
         st.divider()
-        st.write("#### 🤖 Sugestão de Aporte Inteligente (Considera Metas da Sidebar)")
-        val = st.number_input("Valor do Aporte (R$)", 1000.0)
-        if st.button("Calcular Distribuição"):
+        val = st.number_input("Aporte (R$)", 1000.0)
+        if st.button("Sugerir Aporte"):
             sug = sugerir_aportes(df_rank if 'df_rank' in locals() else pd.DataFrame(), val, st.session_state.metas_setor)
             st.dataframe(sug, use_container_width=True)
 
 # --- ABA 3: FIIs ---
 with tabs[2]:
-    st.subheader("🏢 Scanner FIIs (CSV)")
-    uploaded = st.file_uploader("Upload CSV", type=["csv"])
+    st.subheader("🏢 Scanner FIIs")
+    uploaded = st.file_uploader("Upload CSV StatusInvest", type=["csv"])
     if uploaded:
         df_fii = scanner_fiis_csv(uploaded)
         if not df_fii.empty:
@@ -422,6 +419,6 @@ with tabs[3]:
         motor = MotorAnalise()
         sims = motor.monte_carlo(val_atual, aporte, 10, 1000)
         fig = go.Figure(go.Histogram(x=sims, nbinsx=40, marker_color='green'))
-        fig.update_layout(title="Distribuição de Probabilidade de Patrimônio")
+        fig.update_layout(title="Distribuição de Patrimônio")
         st.plotly_chart(fig, use_container_width=True)
-        st.metric("Cenário Provável (Mediana)", f"R$ {np.median(sims):,.2f}")
+        st.metric("Mediana", f"R$ {np.median(sims):,.2f}")
