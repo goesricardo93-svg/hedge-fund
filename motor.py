@@ -34,7 +34,7 @@ class MotorAnalise:
             if len(fechamento) < 30: return None
             preco_atual = float(fechamento.iloc[-1])
 
-            # --- 1. CÁLCULOS ALGO-TRADING (TÉCNICOS) ---
+            # --- 1. CÁLCULOS ALGO-TRADING ---
             mme9 = fechamento.ewm(span=9, adjust=False).mean()
             mme21 = fechamento.ewm(span=21, adjust=False).mean()
             
@@ -57,9 +57,10 @@ class MotorAnalise:
             volatilidade = retornos.std() * (252 ** 0.5) if not retornos.empty else 0.0
             
             media_vol_20 = volume.rolling(20).mean().iloc[-1]
-            vol_relativo = (volume.iloc[-1] / media_vol_20) if media_vol_20 > 0 else 1.0
+            # Proteção contra divisão por zero
+            vol_relativo = (volume.iloc[-1] / media_vol_20) if (media_vol_20 and media_vol_20 > 0) else 1.0
 
-            # Suportes e Resistências (Janela 60 dias)
+            # Suportes e Resistências
             suporte = float(fechamento.tail(60).min())
             resistencia = float(fechamento.tail(60).max())
             stop_loss = suporte * 0.97
@@ -134,13 +135,14 @@ class MotorAnalise:
                 "motivos": ", ".join(motivos) + (" | ⚠️ " + ", ".join(alertas) if alertas else ""),
                 "p_bazin": p_bazin, "p_graham": p_graham, "p_gordon": p_gordon,
                 "dy_mensal": dy_mensal, "dy_anual": dy_anual,
-                # Dados Técnicos p/ Tabela Algo-Trading
+                # Dados Técnicos
                 "mme9": mme9.iloc[-1], "mme21": mme21.iloc[-1], "tendencia": tendencia,
                 "macd": macd_line.iloc[-1], "macd_signal": signal_line.iloc[-1], "status_macd": status_macd,
-                "rsi": rsi, "volatilidade": volatilidade, "vol_relativo": vol_relativo,
+                "rsi": rsi, "volatilidade": volatilidade, 
+                "vol_relativo": vol_relativo, # CHAVE ESSENCIAL
                 "stop_loss": stop_loss, "stop_gain": stop_gain, "suporte": suporte, "resistencia": resistencia,
                 # Dados Risco
-                "liq_media": vol_fin_medio, "pvp": pvp
+                "liq_media": vol_fin_medio, "pvp": pvp, "sinal_tecnico": tendencia
             }
         except Exception as e: return None
 

@@ -18,7 +18,7 @@ except ImportError as e:
     st.error(f"Erro crítico: {e}")
     st.stop()
 
-st.set_page_config(page_title="Hedge Fund Ricardo v64.1", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo v64.2", layout="wide")
 
 # --- 2. ESTRATÉGIA ---
 METAS = {
@@ -38,10 +38,8 @@ def obter_dados(ticker):
 
 @st.cache_data(ttl=86400)
 def download_historico_longo(tickers):
-    # Função segura para baixar dados de múltiplos tickers para Monte Carlo
     try:
         data = yf.download(tickers, period="5y", progress=False)
-        # Ajuste para diferentes formatos de retorno do yfinance
         if isinstance(data, pd.DataFrame):
             if "Adj Close" in data: return data["Adj Close"]
             if "Close" in data: return data["Close"]
@@ -88,10 +86,10 @@ with tabs[0]:
             # 1. HEADER: Preço, DY e Risco
             st.subheader("📊 Raio-X & Segurança")
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Preço", f"R$ {r['preco']:.2f}")
+            c1.metric("Preço", f"R$ {r.get('preco', 0):.2f}")
             c2.metric("DY Anual (Real)", f"{r.get('dy_anual', 0):.2f}%")
-            if r['score_ia'] == 0: c3.error("BLOQUEADO (0/100)")
-            else: c3.metric("Score IA", f"{r['score_ia']}/100", delta=r['decisao_ia'])
+            if r.get('score_ia', 0) == 0: c3.error("BLOQUEADO (0/100)")
+            else: c3.metric("Score IA", f"{r.get('score_ia', 0)}/100", delta=r.get('decisao_ia', '-'))
             c4.metric("Liquidez", f"R$ {r.get('liq_media', 0)/1000:.0f}k")
             
             st.divider()
@@ -106,23 +104,33 @@ with tabs[0]:
             if "⚠️" in motivos or "⛔" in motivos: k2.error(motivos)
             else: k2.info(motivos)
 
-            # 3. PAINEL ALGO-TRADING (RESTAURADO)
+            # 3. PAINEL ALGO-TRADING (BLINDADO COM .GET)
             st.subheader("📈 Painel Algo-Trading (Técnico)")
             
             # Métricas em Colunas
             tec1, tec2, tec3, tec4 = st.columns(4)
             tec1.metric("Tendência (9x21)", r.get('sinal_tecnico', '-'))
-            tec2.metric("MACD Status", "COMPRA" if r['macd'] > r['macd_signal'] else "VENDA", delta=f"{r['macd']:.2f}")
-            tec3.metric("🛑 Stop Loss", f"R$ {r['stop_loss']:.2f}")
-            tec4.metric("✅ Stop Gain", f"R$ {r['stop_gain']:.2f}")
+            
+            # Tratamento de MACD para evitar erro se faltar dado
+            macd_val = r.get('macd', 0)
+            macd_sig = r.get('macd_signal', 0)
+            status_macd = "COMPRA" if macd_val > macd_sig else "VENDA"
+            tec2.metric("MACD Status", status_macd, delta=f"{macd_val:.2f}")
+            
+            tec3.metric("🛑 Stop Loss", f"R$ {r.get('stop_loss', 0):.2f}")
+            tec4.metric("✅ Stop Gain", f"R$ {r.get('stop_gain', 0):.2f}")
 
-            # Tabela Técnica Detalhada
+            # Tabela Técnica Detalhada (AQUI ESTAVA O ERRO ANTES, AGORA CORRIGIDO)
+            rsi_val = r.get('rsi', 50)
+            vol_val = r.get('volatilidade', 0)
+            vol_rel = r.get('vol_relativo', 1.0)
+            
             df_algo = pd.DataFrame([
-                {"Indicador": "RSI (14)", "Valor": f"{r['rsi']:.0f}", "Interpretação": "Sobrevendido (<30)" if r['rsi']<30 else "Sobrecomprado (>70)" if r['rsi']>70 else "Neutro"},
-                {"Indicador": "Volatilidade Anual", "Valor": f"{r['volatilidade']*100:.1f}%", "Interpretação": "Risco de Mercado"},
-                {"Indicador": "Volume Relativo", "Valor": f"{r['vol_relativo']:.2f}x", "Interpretação": "Volume acima da média" if r['vol_relativo'] > 1 else "Volume baixo"},
-                {"Indicador": "Suporte (60d)", "Valor": f"R$ {r['suporte']:.2f}", "Interpretação": "Piso do preço"},
-                {"Indicador": "Resistência (60d)", "Valor": f"R$ {r['resistencia']:.2f}", "Interpretação": "Teto do preço"}
+                {"Indicador": "RSI (14)", "Valor": f"{rsi_val:.0f}", "Interpretação": "Sobrevendido (<30)" if rsi_val<30 else "Sobrecomprado (>70)" if rsi_val>70 else "Neutro"},
+                {"Indicador": "Volatilidade Anual", "Valor": f"{vol_val*100:.1f}%", "Interpretação": "Risco de Mercado"},
+                {"Indicador": "Volume Relativo", "Valor": f"{vol_rel:.2f}x", "Interpretação": "Volume acima da média" if vol_rel > 1 else "Volume baixo"},
+                {"Indicador": "Suporte (60d)", "Valor": f"R$ {r.get('suporte', 0):.2f}", "Interpretação": "Piso do preço"},
+                {"Indicador": "Resistência (60d)", "Valor": f"R$ {r.get('resistencia', 0):.2f}", "Interpretação": "Teto do preço"}
             ])
             st.dataframe(df_algo, use_container_width=True)
 
@@ -160,42 +168,32 @@ with tabs[1]:
             st.success("Plano de Compra:")
             st.dataframe(df_show[["Ticker", "Setor", "Score", "Aporte Sugerido (R$)"]].style.format({"Aporte Sugerido (R$)": "R$ {:.2f}"}), use_container_width=True)
 
-# === ABA 3: SCANNER ===
+# === DEMAIS ABAS ===
 with tabs[2]:
     st.subheader("Scanner FIIs")
     up = st.file_uploader("Upload CSV", type=["csv"])
     if up and scanner_fiis_csv: st.dataframe(scanner_fiis_csv(up))
 
-# === ABA 4: RENDA FIXA ===
 with tabs[3]:
     st.subheader("Renda Fixa")
     st.session_state.carteira_rf = st.data_editor(st.session_state.carteira_rf, num_rows="dynamic")
     st.metric("Total RF", f"R$ {st.session_state.carteira_rf['Saldo Atual'].sum():,.2f}")
 
-# === ABA 5: FUTURO (MONTE CARLO) - CORRIGIDO AQUI ===
 with tabs[4]:
     st.subheader("Monte Carlo")
     if st.button("Simular"):
-        # AQUI ESTAVA O ERRO ANTES, AGORA ESTÁ CORRIGIDO:
         tks = st.session_state.carteira_acoes["Ticker"].tolist()
-        
         h = download_historico_longo(tks)
         if not h.empty:
-            # Tratamento para garantir que pct_change funcione
             r = h.pct_change().dropna().mean(axis=1) if isinstance(h, pd.DataFrame) else h.pct_change().dropna()
-            # Chama o motor se a serie não estiver vazia
-            if len(r) > 0:
-                st.line_chart(MotorAnalise().monte_carlo_carteira(r, 100000, 2000))
-            else:
-                st.warning("Dados insuficientes para simulação.")
-        else: st.error("Erro ao baixar histórico para simulação.")
+            if len(r) > 0: st.line_chart(MotorAnalise().monte_carlo_carteira(r, 100000, 2000))
+            else: st.warning("Dados insuficientes.")
+        else: st.error("Erro ao baixar dados.")
 
-# === ABA 6: FISCAL ===
 with tabs[5]:
     st.subheader("Fiscal")
     if st.button("Calcular") and calcular_darf: st.write(calcular_darf(st.session_state.carteira_acoes))
 
-# === ABA 7: OPÇÕES ===
 with tabs[6]:
     st.subheader("Opções")
     if BlackScholes:
