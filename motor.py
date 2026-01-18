@@ -87,20 +87,29 @@ class MotorAnalise:
             vpa = safe_get("bookValue")
             div_reais = (dy_anual / 100) * preco_atual
             
+            # Cálculo dos Modelos Individuais
             p_bazin = div_reais / 0.06 if div_reais > 0 else 0
             p_graham = np.sqrt(22.5 * lpa * vpa) if (lpa > 0 and vpa > 0) else 0
-            p_gordon = p_bazin 
+            p_gordon = p_bazin # Simplificação conservadora para Gordon
 
-            # ROBÔ DE PREÇO JUSTO (Média inteligente)
-            validos = [x for x in [p_bazin, p_graham] if x > 0]
-            preco_justo = sum(validos) / len(validos) if validos else 0
+            # --- IDENTIFICAÇÃO DE SETOR PARA DECISÃO DE PREÇO JUSTO ---
+            setor_ativo = self.identificar_setor(info, ticker)
+            is_fii = "FII" in setor_ativo
+
+            # ROBÔ DE PREÇO JUSTO (Lógica Condicional Ricardo)
+            if is_fii:
+                # FIIs: Apenas Bazin importa (Renda)
+                # Graham é ignorado pois distorce FIIs de Papel/Tijolo
+                preco_justo = p_bazin
+            else:
+                # Ações: Média inteligente entre Patrimônio (Graham) e Renda (Bazin)
+                validos = [x for x in [p_bazin, p_graham] if x > 0]
+                preco_justo = sum(validos) / len(validos) if validos else 0
 
             # --- 4. SCORE & RISCO ---
             score = 50
             motivos = []
             alertas = []
-            setor_ativo = self.identificar_setor(info, ticker)
-            is_fii = "FII" in setor_ativo
 
             # Travas
             vol_fin_medio = (fechamento * volume).tail(21).mean()
@@ -116,7 +125,7 @@ class MotorAnalise:
                 if pvp > 1.05: score -= 10; alertas.append(f"FII Caro (P/VP {pvp:.2f})")
                 if "Papel" in setor_ativo and pvp > 1.02: score = 0; alertas.append("⛔ ÁGIO EM PAPEL")
 
-            # Pontuação
+            # Pontuação Técnica
             tendencia = "ALTA" if mme9.iloc[-1] > mme21.iloc[-1] else "BAIXA"
             if tendencia == "ALTA": score += 15; motivos.append("Tendência Alta")
             else: score -= 15
@@ -126,9 +135,11 @@ class MotorAnalise:
             if vol_relativo > 1.2: score += 5; motivos.append("Volume Forte")
 
             # Valuation Score
+            # Usa o preco_justo calculado corretamente (Só Bazin p/ FII, Média p/ Ações)
             if preco_justo > 0 and preco_atual < preco_justo: 
-                score += 15; motivos.append("Abaixo Valor Justo")
-            elif preco_justo > 0: score -= 10
+                score += 15; motivos.append("Desconto Valuation")
+            elif preco_justo > 0: 
+                score -= 10
 
             if dy_anual > 6.0: score += 10; motivos.append(f"DY {dy_anual:.1f}%")
             if rsi < 30: score += 10; motivos.append("RSI Sobrevendido")
