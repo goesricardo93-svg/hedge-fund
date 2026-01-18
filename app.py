@@ -19,13 +19,13 @@ except ImportError as e:
     st.error(f"Erro Crítico de Arquitetura: Faltam arquivos modulares. Detalhes: {e}")
     st.stop()
 
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 41.0", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 42.0", layout="wide")
 
 # ======================================================
 # 2. CACHE E FUNÇÕES UTILITÁRIAS
 # ======================================================
 @st.cache_data(ttl=3600)
-def obter_dados_v41(ticker): 
+def obter_dados_v42(ticker): 
     try:
         t = yf.Ticker(ticker)
         hist = t.history(period="2y")
@@ -88,7 +88,7 @@ if (hoje.day == 1 or forcar_envio) and f"report_{mes_str}" not in st.session_sta
         try:
             res_auto = []
             for _, row in st.session_state.carteira_acoes.iterrows():
-                r = obter_dados_v41(row["Ticker"])
+                r = obter_dados_v42(row["Ticker"])
                 if r:
                     res_auto.append({
                         "Ticker": row["Ticker"],
@@ -119,11 +119,11 @@ if st.sidebar.button("🔄 Restaurar Padrões"):
 
 tabs = st.tabs(["🔎 Análise", "💼 Carteira", "🏢 FIIs 360", "🛡️ RF & PGBL", "💰 Futuro", "🦁 Fiscal"])
 
-# --- ABA 1: ANÁLISE (CORRIGIDA - GRÁFICO) ---
+# --- ABA 1: ANÁLISE ---
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
     motor = MotorAnalise()
-    r = obter_dados_v41(ticker_input)
+    r = obter_dados_v42(ticker_input)
     
     if r:
         div_info = motor.consultar_dividendos(ticker_input)
@@ -163,25 +163,26 @@ with tabs[0]:
                 "Valor": [f"{r['dy']*100:.2f}%", f"{r['pl']:.2f}", f"{r['pvp']:.2f}", f"{r['roe']*100:.1f}%", f"{r['divida_ebitda']:.2f}x"]
             }), use_container_width=True)
 
-        # --- CORREÇÃO DO GRÁFICO ---
+        # --- GRÁFICO (CORRIGIDO + MM200) ---
         st.subheader("📈 Gráfico Técnico")
         try:
-            hist = yf.download(ticker_input, period="2y", progress=False)
-            if not hist.empty:
-                # Função para garantir que os dados sejam Series (1D) e não DataFrame (2D)
+            hist_chart = yf.download(ticker_input, period="2y", progress=False)
+            if not hist_chart.empty:
+                # Função para garantir que os dados sejam Series (1D)
                 def fix_data(col_name):
                     if col_name in hist.columns:
                         d = hist[col_name]
                         if isinstance(d, pd.DataFrame): return d.iloc[:, 0]
                         return d
-                    return hist.iloc[:, 0] # Fallback
+                    return hist.iloc[:, 0]
 
                 open_p = fix_data("Open")
                 high_p = fix_data("High")
                 low_p = fix_data("Low")
                 close_p = fix_data("Close")
                 
-                mm50 = close_p.rolling(50).mean()
+                mm50 = close_p.rolling(window=50).mean()
+                mm200 = close_p.rolling(window=200).mean() # Restaurada!
                 
                 fig = go.Figure()
                 fig.add_trace(go.Candlestick(
@@ -189,7 +190,9 @@ with tabs[0]:
                     open=open_p, high=high_p, low=low_p, close=close_p,
                     name="Preço"
                 ))
-                fig.add_trace(go.Scatter(x=hist.index, y=mm50, name="MM50", line=dict(color='blue')))
+                fig.add_trace(go.Scatter(x=hist.index, y=mm50, name="MM50 (Curto)", line=dict(color='blue')))
+                fig.add_trace(go.Scatter(x=hist.index, y=mm200, name="MM200 (Longo)", line=dict(color='orange'))) # Restaurada!
+                
                 fig.add_hline(y=r['suporte'], line_dash="dot", line_color="green", annotation_text="SUPORTE")
                 fig.add_hline(y=r['resistencia'], line_dash="dot", line_color="red", annotation_text="RESISTÊNCIA")
                 st.plotly_chart(fig, use_container_width=True)
@@ -210,10 +213,11 @@ with tabs[1]:
         bar = st.progress(0)
         total = len(df_ed)
         for i, row in df_ed.iterrows():
-            r = obter_dados_v41(row["Ticker"])
+            r = obter_dados_v42(row["Ticker"])
             if r:
                 rec = r['decisao_ia']
                 if r['preco'] < row['PM'] * 0.95 and r['score_ia'] > 60: rec = "🔥 COMPRA (Abaixo PM)"
+                
                 if r['score_ia'] >= 80 and row["Ticker"] not in st.session_state.alertas_enviados:
                     disparar_alerta(f"OPORTUNIDADE: {row['Ticker']}", f"Score: {r['score_ia']}")
                     st.session_state.alertas_enviados.add(row["Ticker"])
@@ -270,10 +274,13 @@ with tabs[3]:
 # --- ABA 5: FUTURO ---
 with tabs[4]:
     st.subheader("🔮 Simulação Patrimonial (Monte Carlo Real)")
+    
+    # Define valores iniciais
     real_acoes = st.session_state.df_analisado["Valor_Atual"].sum() if "df_analisado" in st.session_state else 0
     real_rf = st.session_state.carteira_rf["Saldo Atual"].sum()
-    if real_acoes == 0 and not df_ed.empty: real_acoes = (df_ed['Qtd'] * df_ed['PM']).sum()
+    if real_acoes == 0 and not df_ed.empty: real_acoes = (df_ed['Qtd'] * df_ed['PM']).sum() 
     
+    # Inputs Flexíveis
     ci1, ci2 = st.columns(2)
     sim_ini = ci1.number_input("💰 Patrimônio Inicial", value=float(real_acoes + real_rf), step=1000.0)
     sim_apt = ci2.number_input("➕ Aporte Mensal", value=2000.0, step=100.0)
@@ -284,20 +291,26 @@ with tabs[4]:
             retornos = hist.pct_change().dropna().mean(axis=1)
             motor = MotorAnalise()
             
+            # Proporção Risco vs RF
             prop = real_acoes / (real_acoes + real_rf) if (real_acoes + real_rf) > 0 else 1.0
+            
+            # Simula Risco (GBM) e RF (Fixa)
             sim_risco = motor.monte_carlo_carteira(retornos, sim_ini * prop, sim_apt * prop, 10, 1000)
             
+            # Projeta RF
             meses = 120
             taxa_rf = 0.008
             rf_base = (sim_ini * (1-prop)) * ((1 + taxa_rf) ** meses)
             rf_apts = (sim_apt * (1-prop)) * (((1 + taxa_rf) ** meses - 1) / taxa_rf)
             
             total = sim_risco + rf_base + rf_apts
+            
             st.plotly_chart(go.Figure(go.Histogram(x=total, nbinsx=50, marker_color='green')), use_container_width=True)
             k1, k2, k3 = st.columns(3)
             k1.metric("Pessimista (10%)", f"R$ {np.percentile(total, 10):,.2f}")
             k2.metric("Provável (Mediana)", f"R$ {np.median(total):,.2f}")
             k3.metric("Otimista (90%)", f"R$ {np.percentile(total, 90):,.2f}")
+            
         except Exception as e: st.error(f"Erro na simulação: {e}")
 
 # --- ABA 6: FISCAL ---
