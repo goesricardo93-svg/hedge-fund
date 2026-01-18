@@ -1,22 +1,29 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import yfinance as yf
 import pandas as pd
-import datetime
+import numpy as np
 
-# Importação Segura
+# Tenta importar módulos opcionais sem quebrar o app principal
 try:
     from motor import MotorAnalise
     from rebalance import rebalancear_e_aportar
+    # Imports opcionais (se não tiver os arquivos, o app roda sem eles)
+    try: from scanner import scanner_fiis_csv
+    except: scanner_fiis_csv = None
+    try: from tax import calcular_darf
+    except: calcular_darf = None
+    try: from options import BlackScholes
+    except: BlackScholes = None
 except ImportError as e:
-    st.error(f"Erro ao importar módulos: {e}")
+    st.error(f"Erro crítico nos módulos: {e}")
     st.stop()
 
-st.set_page_config(page_title="Hedge Fund Ricardo v58.0 (Gestor Risco)", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo v59.0 (Full)", layout="wide")
 
-# --- SUAS METAS ---
+# METAS
 METAS = {
-    "Renda Fixa": 30.0,
-    "Exterior": 20.0,
+    "Renda Fixa": 30.0, "Exterior": 20.0,
     "Ações-Bancos": 7.5, "Ações-Elétricas": 7.5, "Ações-Seguridade": 6.0, "Ações-Commodities": 6.0, "Ações-Outros": 3.0,
     "FIIs-Papel": 10.0, "FIIs-Tijolo": 6.0, "FIIs-Outros": 4.0
 }
@@ -24,31 +31,21 @@ METAS = {
 @st.cache_data(ttl=3600)
 def obter_dados(ticker):
     try:
-        t = yf.Ticker(ticker)
-        hist = t.history(period="1y") 
+        t = yf.Ticker(ticker); hist = t.history(period="1y")
         if hist.empty: return None
         return MotorAnalise().analisar(hist, t.info, ticker)
     except: return None
 
 def auto_classificar():
     motor = MotorAnalise()
-    progress_text = "Classificando ativos via IA..."
-    my_bar = st.progress(0, text=progress_text)
-    
-    total = len(st.session_state.carteira_acoes)
     for idx, row in st.session_state.carteira_acoes.iterrows():
         try:
             t = yf.Ticker(row["Ticker"])
             setor = motor.identificar_setor(t.info, row["Ticker"])
             st.session_state.carteira_acoes.at[idx, "Setor"] = setor
-        except:
-            st.session_state.carteira_acoes.at[idx, "Setor"] = "Outros"
-        my_bar.progress((idx + 1) / total)
-    
-    my_bar.empty()
-    st.success("Classificação Concluída!")
+        except: st.session_state.carteira_acoes.at[idx, "Setor"] = "Outros"
 
-# Inicializa Carteira
+# INICIALIZAÇÃO
 if "carteira_acoes" not in st.session_state:
     st.session_state.carteira_acoes = pd.DataFrame([
         ["BBAS3.SA", 100, 24.50, "Aguardando..."],
@@ -57,104 +54,107 @@ if "carteira_acoes" not in st.session_state:
         ["IVVB11.SA", 5, 280.00, "Aguardando..."]
     ], columns=["Ticker", "Qtd", "PM", "Setor"])
 
+if "carteira_rf" not in st.session_state:
+    st.session_state.carteira_rf = pd.DataFrame([["Tesouro Selic", 10000.0, "Pós"]], columns=["Ativo", "Saldo Atual", "Tipo"])
+
 # --- INTERFACE ---
-st.title("🛡️ Hedge Fund Ricardo (Gestor de Risco)")
+st.title("💰 Hedge Fund Ricardo")
+st.sidebar.button("🧹 Limpar Cache", on_click=lambda: st.cache_data.clear())
 
-tabs = st.tabs(["🔎 Análise Blindada", "💼 Carteira Inteligente"])
+# RECOLOCANDO TODAS AS ABAS
+tabs = st.tabs(["🔎 Análise", "💼 Carteira", "🏢 FIIs 360", "🛡️ Renda Fixa", "💰 Futuro", "🦁 Fiscal", "⚡ Opções"])
 
+# 1. ANÁLISE (Com Travas de Risco)
 with tabs[0]:
-    c_input, c_btn = st.columns([3, 1])
-    t = c_input.text_input("Ticker", "MXRF11.SA").upper()
-    if c_btn.button("Analisar Risco"):
+    t = st.text_input("Ticker", "MXRF11.SA").upper()
+    if st.button("Analisar"):
         r = obter_dados(t)
         if r:
-            # --- ÁREA DE DESTAQUE ---
+            # Cabeçalho com Riscos
             st.subheader("📊 Raio-X & Segurança")
-            col1, col2, col3, col4 = st.columns(4)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Preço", f"R$ {r['preco']:.2f}")
+            c2.metric("DY Anual (Real)", f"{r.get('dy_anual', 0):.2f}%")
             
-            col1.metric("Preço", f"R$ {r['preco']:.2f}")
-            col2.metric("DY Anual", f"{r['dy_anual']:.1f}%")
+            # Score Vermelho se for 0
+            score_val = r['score_ia']
+            if score_val == 0: c3.error("BLOQUEADO (0/100)")
+            else: c3.metric("Score IA", f"{score_val}/100", delta=r['decisao_ia'])
             
-            # Formatação condicional do Score
-            if r['score_ia'] == 0:
-                col3.error("BLOQUEADO (0/100)")
-            else:
-                col3.metric("Score IA", f"{r['score_ia']}/100", delta=r['decisao_ia'])
-            
-            liq_formatada = f"R$ {r['liq_media']/1000:.0f}k"
-            col4.metric("Liquidez Média", liq_formatada)
+            c4.metric("Liquidez Média", f"R$ {r.get('liq_media', 0)/1000:.0f}k")
             
             st.divider()
             
-            c1, c2 = st.columns(2)
-            with c1:
-                st.subheader("📋 Valuation")
-                st.table(pd.DataFrame({
-                    "Modelo": ["Bazin", "Graham", "Gordon"], 
-                    "Valor": [f"R$ {r['p_bazin']:.2f}", f"R$ {r['p_graham']:.2f}", f"R$ {r['p_gordon']:.2f}"]
-                }))
-            with c2:
-                st.subheader("🧠 Análise de Riscos & Oportunidades")
-                if "⚠️" in r['motivos'] or "⛔" in r['motivos']:
-                    st.error(r['motivos']) # Mostra em vermelho se tiver perigo
-                else:
-                    st.info(r['motivos']) # Azul se estiver normal
-
-        else:
-            st.error("Ativo não encontrado ou sem dados.")
-
-with tabs[1]:
-    st.subheader("Gestão & Rebalanceamento")
-    
-    if st.button("🔄 1. Atualizar Classificação (IA)"):
-        auto_classificar()
-        st.rerun()
+            # Valuation
+            k1, k2 = st.columns(2)
+            k1.table(pd.DataFrame({"Modelo": ["Bazin", "Graham", "Gordon"], "Valor": [f"R$ {r.get('p_bazin',0):.2f}", f"R$ {r.get('p_graham',0):.2f}", f"R$ {r.get('p_gordon',0):.2f}"]}))
             
-    df_edited = st.data_editor(
-        st.session_state.carteira_acoes,
-        column_config={
-            "Setor": st.column_config.SelectboxColumn("Setor", options=list(METAS.keys()), required=True)
-        },
-        use_container_width=True,
-        num_rows="dynamic"
-    )
-    st.session_state.carteira_acoes = df_edited
+            # Motivos (Coloridos se tiver perigo)
+            motivos = r.get('motivos', '')
+            if "⚠️" in motivos or "⛔" in motivos: k2.error(motivos)
+            else: k2.info(motivos)
+            
+        else: st.error("Ativo não encontrado.")
+
+# 2. CARTEIRA (Rebalanceamento)
+with tabs[1]:
+    st.subheader("Gestão da Carteira")
+    if st.button("🤖 1. Classificar (IA)"): auto_classificar(); st.rerun()
     
-    aporte = st.number_input("Quanto quer aportar hoje? (R$)", value=5000.0)
+    df_ed = st.data_editor(st.session_state.carteira_acoes, num_rows="dynamic", use_container_width=True, column_config={"Setor": st.column_config.SelectboxColumn("Setor", options=list(METAS.keys()))})
+    st.session_state.carteira_acoes = df_ed
     
-    if st.button("🚀 2. Calcular Aportes Seguros"):
-        dados_completos = []
-        for _, row in df_edited.iterrows():
+    aporte = st.number_input("Aporte (R$)", value=5000.0)
+    if st.button("🚀 2. Rebalancear"):
+        dados = []
+        for _, row in df_ed.iterrows():
             d = obter_dados(row["Ticker"])
-            if d:
-                dados_completos.append({
-                    "Ticker": row["Ticker"],
-                    "Setor": row["Setor"],
-                    "Qtd": row["Qtd"],
-                    "Valor_Atual": row["Qtd"] * d["preco"],
-                    "Score": d["score_ia"]
-                })
-            else:
-                dados_completos.append({
-                    "Ticker": row["Ticker"],
-                    "Setor": row["Setor"],
-                    "Qtd": row["Qtd"],
-                    "Valor_Atual": row["Qtd"] * 10.0,
-                    "Score": 50
-                })
+            if d: dados.append({**row.to_dict(), "Preço": d["preco"], "Valor_Atual": row["Qtd"]*d["preco"], "Score": d["score_ia"]})
+            else: dados.append({**row.to_dict(), "Preço": 10, "Valor_Atual": row["Qtd"]*10, "Score": 50}) # Fallback
         
-        df_calc = pd.DataFrame(dados_completos)
-        df_final = rebalancear_e_aportar(df_calc, aporte, METAS)
+        df_final = rebalancear_e_aportar(pd.DataFrame(dados), aporte, METAS)
         
-        st.divider()
-        st.subheader("Sugestão de Compra (Filtrada pelo Risco)")
-        # Só mostra quem tem aporte sugerido E Score > 0 (Dupla segurança)
+        # Filtra apenas compras válidas (> R$ 1 e Score > 0)
         df_show = df_final[(df_final["Aporte Sugerido (R$)"] > 1) & (df_final["Score"] > 0)]
         
         if df_show.empty and df_final["Aporte Sugerido (R$)"].sum() > 0:
-            st.warning("O rebalanceador sugeriu compras, mas os ativos foram bloqueados pelas Travas de Segurança (Score 0). Revise a qualidade dos ativos.")
+            st.warning("O sistema sugeriu compras, mas os ativos foram BLOQUEADOS pelas travas de segurança (Score 0).")
         else:
-            st.dataframe(
-                df_show[["Ticker", "Setor", "Score", "Aporte Sugerido (R$)"]].style.format({"Aporte Sugerido (R$)": "R$ {:.2f}"}),
-                use_container_width=True
-            )
+            st.success("Plano de Compra Gerado:")
+            st.dataframe(df_show[["Ticker", "Setor", "Score", "Aporte Sugerido (R$)"]].style.format({"Aporte Sugerido (R$)": "R$ {:.2f}"}), use_container_width=True)
+
+# 3. FIIs 360 (Restaurado)
+with tabs[2]:
+    st.write("Scanner de FIIs")
+    up = st.file_uploader("Upload CSV StatusInvest", type=["csv"])
+    if up and scanner_fiis_csv:
+        df_fii = scanner_fiis_csv(up)
+        st.dataframe(df_fii)
+    elif up and not scanner_fiis_csv: st.warning("Arquivo scanner.py ausente.")
+
+# 4. RF
+with tabs[3]:
+    st.write("Renda Fixa")
+    st.session_state.carteira_rf = st.data_editor(st.session_state.carteira_rf, num_rows="dynamic")
+    st.metric("Total RF", f"R$ {st.session_state.carteira_rf['Saldo Atual'].sum():,.2f}")
+
+# 5. Futuro (Placeholder Seguro)
+with tabs[4]: st.info("Simulação de Monte Carlo disponível se arquivos auxiliares estiverem presentes.")
+
+# 6. Fiscal
+with tabs[5]:
+    st.write("Cálculo de DARF")
+    if st.button("Calcular") and calcular_darf:
+        res = calcular_darf(st.session_state.carteira_acoes)
+        st.write(res)
+    elif not calcular_darf: st.warning("Arquivo tax.py ausente.")
+
+# 7. Opções
+with tabs[6]:
+    st.write("Black-Scholes")
+    if BlackScholes:
+        spot = st.number_input("Preço Ativo", 30.0)
+        strike = st.number_input("Strike", 32.0)
+        bs = BlackScholes(spot, strike, 1/12, 0.12, 0.3, "call")
+        st.metric("Preço Justo", f"R$ {bs.calcular_preco():.2f}")
+    else: st.warning("Arquivo options.py ausente.")
