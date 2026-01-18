@@ -1,5 +1,5 @@
 import streamlit as st
-import streamlit.components.v1 as components # Novo import para TradingView
+import streamlit.components.v1 as components
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
@@ -20,13 +20,13 @@ except ImportError as e:
     st.error(f"Erro Crítico de Arquitetura: Faltam arquivos modulares. Detalhes: {e}")
     st.stop()
 
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 45.0 (TradingView)", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 46.0", layout="wide")
 
 # ======================================================
 # 2. CACHE E FUNÇÕES UTILITÁRIAS
 # ======================================================
 @st.cache_data(ttl=3600)
-def obter_dados_v45(ticker): 
+def obter_dados_v46(ticker): 
     try:
         t = yf.Ticker(ticker)
         hist = t.history(period="2y")
@@ -51,11 +51,9 @@ def formatar_ticker(ticker):
 def renderizar_tradingview_widget(ticker):
     """Renderiza o Gráfico Profissional do TradingView"""
     tv_symbol = ticker
-    # Adaptação para B3
     if ".SA" in ticker:
         clean = ticker.replace(".SA", "")
         tv_symbol = f"BMFBOVESPA:{clean}"
-    # Adaptação para Cripto
     elif "-USD" in ticker:
         clean = ticker.replace("-USD", "")
         tv_symbol = f"BINANCE:{clean}USDT"
@@ -120,7 +118,7 @@ if (hoje.day == 1 or forcar_envio) and f"report_{mes_str}" not in st.session_sta
         try:
             res_auto = []
             for _, row in st.session_state.carteira_acoes.iterrows():
-                r = obter_dados_v45(row["Ticker"])
+                r = obter_dados_v46(row["Ticker"])
                 if r:
                     res_auto.append({
                         "Ticker": row["Ticker"],
@@ -155,31 +153,22 @@ if st.sidebar.button("🔄 Restaurar Padrões"):
 
 tabs = st.tabs(["🔎 Análise", "💼 Carteira", "🏢 FIIs 360", "🛡️ RF & PGBL", "💰 Futuro", "🦁 Fiscal"])
 
-# --- ABA 1: ANÁLISE (COM TRADINGVIEW) ---
+# --- ABA 1: ANÁLISE ---
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
     motor = MotorAnalise()
-    r = obter_dados_v45(ticker_input)
+    r = obter_dados_v46(ticker_input)
     
     if r:
+        # Box Proventos
         div_info = motor.consultar_dividendos(ticker_input)
-        
-        # Box Proventos (Duplo: Passado/Futuro)
         cor_box = "green" if div_info['status'] == "AGENDA" else "blue"
         st.markdown(f"""
         <div style="padding:15px; border-radius:10px; background-color:rgba(0,100,0,0.05); border:1px solid {cor_box}; margin-bottom:15px;">
             <h4 style="margin-top:0; color:{cor_box};">💰 Relatório de Proventos</h4>
             <table style="width:100%; border:none;">
-                <tr>
-                    <td style="font-weight:bold;">⏪ Último Pago:</td>
-                    <td>{div_info['ultimo_data']}</td>
-                    <td><b>{div_info['ultimo_valor']}</b></td>
-                </tr>
-                <tr>
-                    <td style="font-weight:bold; color:{cor_box};">⏩ Próximo (Prev):</td>
-                    <td>{div_info['proximo_data']}</td>
-                    <td><b>{div_info['proximo_valor']}</b></td>
-                </tr>
+                <tr><td style="font-weight:bold;">⏪ Último Pago:</td><td>{div_info['ultimo_data']}</td><td><b>{div_info['ultimo_valor']}</b></td></tr>
+                <tr><td style="font-weight:bold; color:{cor_box};">⏩ Próximo (Prev):</td><td>{div_info['proximo_data']}</td><td><b>{div_info['proximo_valor']}</b></td></tr>
             </table>
         </div>""", unsafe_allow_html=True)
 
@@ -192,12 +181,14 @@ with tabs[0]:
         st.write(f"**Análise Cruzada:** {r['motivos']}")
         st.divider()
 
+        # Métricas Rápidas
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("Preço Atual", f"R$ {r['preco']:.2f}")
         k2.metric("Teto (Alvo IA)", f"R$ {r['stop_gain']:.2f}")
         k3.metric("RSI (14)", f"{r['rsi']:.0f}")
         k4.metric("Volatilidade", f"{r['volatilidade']*100:.1f}%")
 
+        # Tabelas Valuation e Qualidade
         col_val, col_fund = st.columns(2)
         with col_val:
             st.subheader("📋 Valuation")
@@ -213,10 +204,31 @@ with tabs[0]:
             }), use_container_width=True)
 
         st.divider()
-        st.subheader("📈 Gráfico Profissional (TradingView)")
+        st.subheader("📈 Gráfico Profissional")
         renderizar_tradingview_widget(ticker_input)
+        
+        # --- NOVA TABELA OPERACIONAL (ABAIXO DO GRÁFICO) ---
+        st.subheader("🎯 Setup Operacional (IA)")
+        
+        # Criação do DataFrame com os dados calculados pelo Motor
+        df_setup = pd.DataFrame([
+            {"Indicador": "Preço Atual", "Valor": f"R$ {r['preco']:.2f}"},
+            {"Indicador": "Suporte Relevante (60d)", "Valor": f"R$ {r['suporte']:.2f}"},
+            {"Indicador": "Resistência (60d)", "Valor": f"R$ {r['resistencia']:.2f}"},
+            {"Indicador": "🛑 Stop Loss Sugerido", "Valor": f"R$ {r['stop_loss']:.2f}"},
+            {"Indicador": "🎯 Stop Gain (Alvo)", "Valor": f"R$ {r['stop_gain']:.2f}"}
+        ])
+        
+        # Exibição elegante
+        st.dataframe(
+            df_setup, 
+            use_container_width=True, 
+            hide_index=True
+        )
+        st.info("Nota: O Stop Loss é calculado 3% abaixo do suporte recente e o Alvo 2% acima da resistência recente.")
+        # ---------------------------------------------------
 
-    else: st.warning("Ativo não encontrado ou Yahoo Finance instável. Tente limpar o cache.")
+    else: st.warning("Ativo não encontrado. Tente limpar o cache.")
 
 # --- ABA 2: CARTEIRA ---
 with tabs[1]:
@@ -232,7 +244,7 @@ with tabs[1]:
         bar = st.progress(0)
         total = len(df_ed)
         for i, row in df_ed.iterrows():
-            r = obter_dados_v45(row["Ticker"])
+            r = obter_dados_v46(row["Ticker"])
             if r:
                 rec = r['decisao_ia']
                 if r['preco'] < row['PM'] * 0.95 and r['score_ia'] > 60: rec = "🔥 COMPRA (Abaixo PM)"
