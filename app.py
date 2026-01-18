@@ -18,13 +18,13 @@ except ImportError as e:
     st.error(f"Erro Crítico: Faltam arquivos modulares ({e}).")
     st.stop()
 
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 35.0 (Rebalance Fix)", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 36.0 (Fixed)", layout="wide")
 
 # ======================================================
 # CACHE E FUNÇÕES
 # ======================================================
 @st.cache_data(ttl=3600)
-def obter_dados_v35(ticker):
+def obter_dados_v36(ticker):
     try:
         t = yf.Ticker(ticker)
         hist = t.history(period="2y")
@@ -35,9 +35,10 @@ def obter_dados_v35(ticker):
 @st.cache_data(ttl=86400)
 def download_historico_longo(tickers):
     data = yf.download(tickers, period="5y", progress=False)
-    if "Adj Close" in data: return data["Adj Close"]
-    elif "Close" in data: return data["Close"]
-    else: return data
+    if isinstance(data, pd.DataFrame):
+        if "Adj Close" in data: return data["Adj Close"]
+        elif "Close" in data: return data["Close"]
+    return data
 
 def formatar_ticker(ticker):
     t = ticker.strip().upper()
@@ -90,7 +91,7 @@ tabs = st.tabs(["🔎 Análise", "💼 Carteira", "🏢 FIIs 360", "🛡️ RF &
 # --- ABA 1: ANÁLISE ---
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
-    r = obter_dados_v35(ticker_input)
+    r = obter_dados_v36(ticker_input)
     
     if r:
         col_ia1, col_ia2 = st.columns([1, 3])
@@ -102,6 +103,7 @@ with tabs[0]:
         st.write(f"**Gatilhos:** {r['motivos']}")
         st.divider()
 
+        # Plugin de Dividendos (Agora existe no Motor!)
         div_info = MotorAnalise().consultar_dividendos(ticker_input)
         
         c1, c2, c3, c4 = st.columns(4)
@@ -124,6 +126,7 @@ with tabs[0]:
         try:
             hist_chart = yf.download(ticker_input, period="2y", progress=False)
             if not hist_chart.empty:
+                # Tratamento robusto para gráfico
                 close = hist_chart["Close"] if "Close" in hist_chart else hist_chart.iloc[:,0]
                 if isinstance(close, pd.DataFrame): close = close.iloc[:,0]
                 
@@ -137,7 +140,7 @@ with tabs[0]:
         except Exception as e: st.error(f"Erro gráfico: {e}")
     else: st.warning("Ticker não encontrado.")
 
-# --- ABA 2: CARTEIRA (CORRIGIDA) ---
+# --- ABA 2: CARTEIRA ---
 with tabs[1]:
     st.subheader(f"💼 Gestão de Carteira ({len(st.session_state.carteira_acoes)} Ativos)")
     df_ed = st.data_editor(st.session_state.carteira_acoes, num_rows="dynamic", use_container_width=True)
@@ -151,55 +154,40 @@ with tabs[1]:
         bar = st.progress(0)
         total_ativos = len(df_ed)
         for i, row in df_ed.iterrows():
-            r = obter_dados_v35(row["Ticker"])
+            r = obter_dados_v36(row["Ticker"])
             if r:
                 rec = r['decisao_ia']
                 if r['preco'] < row['PM'] * 0.95 and "COMPRA" in rec: rec = "🔥 COMPRA FORTE (Abaixo PM)"
-                
-                # Alerta
                 if r['score_ia'] >= 80 and row["Ticker"] not in st.session_state.alertas_enviados:
                     disparar_alerta(f"TOP PICK: {row['Ticker']}", f"Score: {r['score_ia']}")
                     st.session_state.alertas_enviados.add(row["Ticker"])
-                
-                res.append({
-                    "Ticker": row["Ticker"],
-                    "Preço": r["preco"],
-                    "PM": row["PM"],
-                    "Qtd": row["Qtd"],
-                    "Valor_Atual": row["Qtd"] * r["preco"],
-                    "Lucro": (r["preco"] - row["PM"]) * row["Qtd"],
-                    "Veredito IA": rec,
-                    "Score": r['score_ia'],
-                    "DY": f"{r['dy']*100:.2f}%"
-                })
+                res.append({"Ticker": row["Ticker"], "Preço": r["preco"], "PM": row["PM"], "Qtd": row["Qtd"], "Valor_Atual": row["Qtd"] * r["preco"], "Lucro": (r["preco"] - row["PM"]) * row["Qtd"], "Veredito IA": rec, "Score": r['score_ia'], "DY": f"{r['dy']*100:.2f}%"})
             bar.progress((i+1)/total_ativos)
         
         if res:
             df_res = pd.DataFrame(res)
             st.session_state.df_analisado = df_res 
             
-            # Chama o rebalanceamento
             df_final = rebalancear_e_aportar(df_res, aporte_user)
             
             if not df_final.empty:
                 st.success("✅ Rebalanceamento Concluído!")
                 
-                # Seleção segura de colunas
-                cols_to_show = ["Ticker", "Score", "Valor_Atual", "Lucro", "Veredito IA", "Aporte Sugerido (R$)"]
-                # Filtra apenas as colunas que realmente existem no DataFrame final
-                cols_to_show = [c for c in cols_to_show if c in df_final.columns]
+                # Seleção segura das colunas que existem
+                cols_possiveis = ["Ticker", "Score", "Valor_Atual", "Lucro", "Veredito IA", "Aporte Sugerido (R$)"]
+                cols_exibicao = [c for c in cols_possiveis if c in df_final.columns]
                 
                 def cor_lucro(val): return 'color: green' if val > 0 else 'color: red'
                 
                 st.dataframe(
-                    df_final[cols_to_show]
+                    df_final[cols_exibicao]
                     .style.applymap(cor_lucro, subset=["Lucro"] if "Lucro" in df_final.columns else None)
-                    .format({"Valor_Atual": "R$ {:.2f}", "Lucro": "R$ {:.2f}", "Aporte Sugerido (R$)": "R$ {:.2f}"})
+                    .format({"Valor_Atual": "R$ {:.2f}", "Lucro": "R$ {:.2f}", "Aporte Sugerido (R$)": "R$ {:.2f}"}, na_rep="-")
                     .background_gradient(subset=["Aporte Sugerido (R$)"], cmap="Greens"),
                     use_container_width=True
                 )
             else:
-                st.warning("Não foi possível calcular o rebalanceamento. Verifique se os dados da carteira estão corretos.")
+                st.warning("Não foi possível calcular o rebalanceamento.")
 
 # --- ABA 3: FIIs 360 ---
 with tabs[2]:
@@ -254,7 +242,6 @@ with tabs[4]:
             
             motor = MotorAnalise()
             prop_risco = 1.0 if real_total == 0 else real_acoes / real_total
-            
             sim_start_risco = sim_inicial * prop_risco
             sim_start_rf = sim_inicial * (1 - prop_risco)
             

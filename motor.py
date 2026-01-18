@@ -1,33 +1,31 @@
 import pandas as pd
 import numpy as np
+import yfinance as yf
 
 class MotorAnalise:
     def analisar(self, hist, info, ticker):
         try:
             if hist is None or hist.empty: return None
 
-            # TRATAMENTO ROBUSTO DE DADOS (Correção para atualizações do yfinance)
-            # Tenta pegar 'Close' ou a primeira coluna se for Série única
+            # TRATAMENTO DE DADOS (Compatível com yfinance novo)
             if isinstance(hist, pd.DataFrame):
                 if "Close" in hist.columns:
                     fechamento = hist["Close"]
                 else:
-                    fechamento = hist.iloc[:, 0] # Fallback
+                    fechamento = hist.iloc[:, 0]
             else:
                 fechamento = hist
 
-            # Garante que é uma Series unidimensional
             if isinstance(fechamento, pd.DataFrame):
                 fechamento = fechamento.iloc[:, 0]
             
             preco_atual = float(fechamento.iloc[-1])
             
-            # --- TÉCNICA ---
+            # TÉCNICA
             delta = fechamento.diff()
             gain = delta.clip(lower=0).rolling(14).mean()
             loss = -delta.clip(upper=0).rolling(14).mean()
             
-            # Evita divisão por zero
             if loss.iloc[-1] == 0:
                 rs = 100 
             else:
@@ -46,7 +44,7 @@ class MotorAnalise:
             stop_loss = suporte * 0.97
             stop_gain = resistencia * 1.02 
 
-            # --- FUNDAMENTOS (DY BLINDADO) ---
+            # FUNDAMENTOS
             div_rate = info.get("trailingAnnualDividendRate", 0) or info.get("dividendRate", 0) or 0
             if div_rate > 0:
                 dy = div_rate / preco_atual
@@ -57,13 +55,13 @@ class MotorAnalise:
             lpa = info.get("trailingEps", 0) or 0
             vpa = info.get("bookValue", 0) or 0
             
-            # --- VALUATION ---
+            # VALUATION
             val_div = div_rate if div_rate > 0 else (preco_atual * dy)
             p_bazin = val_div / 0.06 if val_div > 0 else 0
             p_graham = np.sqrt(22.5 * lpa * vpa) if (lpa > 0 and vpa > 0) else 0
             p_gordon = p_bazin
 
-            # --- SCORE IA ---
+            # SCORE IA
             score = 50
             motivos = []
 
@@ -107,43 +105,51 @@ class MotorAnalise:
         except Exception:
             return None
 
-    # --- MONTE CARLO GBM (Correção Matemática) ---
+    # MONTE CARLO GBM (Correção Matemática)
     def monte_carlo_carteira(self, retornos_carteira, valor_inicial, aporte_mensal, anos=10, sims=1000):
         if len(retornos_carteira) == 0: return np.array([])
         
-        # Converte retornos simples para log-retornos (padrão Black-Scholes)
-        # Adiciona pequena constante para evitar log(0) ou log(negativo) se houver erro nos dados
         log_returns = np.log(1 + retornos_carteira)
-        
-        # Parâmetros Anualizados
         mu_diario = log_returns.mean()
         sigma_diario = log_returns.std()
         
-        # Projeção Diária
-        dias_uteis_ano = 252
-        total_dias = anos * dias_uteis_ano
-        passos_por_mes = 21 # Aprox. dias úteis por mês
-        
+        total_dias = anos * 252
+        passos_por_mes = 21
         resultados_finais = []
-        
-        # Drift (Tendência) da simulação
         drift = mu_diario - (0.5 * sigma_diario**2)
         
         for _ in range(sims):
-            # Gera caminho aleatório de retornos para todo o período
             choques = np.random.normal(0, 1, total_dias)
             retornos_diarios_sim = np.exp(drift + sigma_diario * choques)
-            
             saldo = valor_inicial
             dia = 0
-            
             for r in retornos_diarios_sim:
                 saldo = saldo * r
                 dia += 1
-                # Aporte mensal
                 if dia % passos_por_mes == 0:
                     saldo += aporte_mensal
-            
             resultados_finais.append(saldo)
 
         return np.array(resultados_finais)
+
+    # --- PLUGIN DE DIVIDENDOS (REINSERIDO) ---
+    def consultar_dividendos(self, ticker):
+        try:
+            t = yf.Ticker(ticker)
+            cal = t.calendar
+            # O yfinance mudou o retorno de calendar, as vezes é dict, as vezes DataFrame
+            if isinstance(cal, dict) and cal:
+                 return {"status": "CALENDÁRIO", "data": "Verificar RI", "valor": "N/A"}
+            elif isinstance(cal, pd.DataFrame) and not cal.empty:
+                 return {"status": "CONFIRMADO", "data": "Próx. Data", "valor": "Verificar"}
+            
+            # Histórico recente como fallback
+            divs = t.dividends
+            if not divs.empty:
+                ultimo = divs.iloc[-1]
+                data = divs.index[-1].strftime('%d/%m/%Y')
+                return {"status": "ÚLTIMO PAGO", "data": data, "valor": f"R$ {ultimo:.2f}"}
+            
+            return {"status": "SEM DADOS", "data": "-", "valor": "-"}
+        except:
+            return {"status": "ERRO", "data": "-", "valor": "-"}
