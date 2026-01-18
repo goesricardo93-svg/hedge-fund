@@ -18,7 +18,7 @@ except ImportError as e:
     st.error(f"Erro crítico: {e}")
     st.stop()
 
-st.set_page_config(page_title="Hedge Fund Ricardo v66.0", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo v67.0", layout="wide")
 
 # --- 2. CACHE E MOTOR ---
 @st.cache_data(ttl=3600)
@@ -53,8 +53,6 @@ def auto_classificar():
     st.success("Concluído!")
 
 # --- 3. ESTADO INICIAL ---
-
-# A) Metas Padrão (Agora carregadas em um DataFrame editável)
 if "df_metas" not in st.session_state:
     dados_metas = [
         {"Setor": "Renda Fixa", "Meta (%)": 30.0},
@@ -70,7 +68,6 @@ if "df_metas" not in st.session_state:
     ]
     st.session_state.df_metas = pd.DataFrame(dados_metas)
 
-# B) Carteira
 if "carteira_acoes" not in st.session_state:
     st.session_state.carteira_acoes = pd.DataFrame([
         ["BBAS3.SA", 100, 24.50, "Aguardando..."],
@@ -88,36 +85,36 @@ st.sidebar.button("🧹 Limpar Cache", on_click=lambda: st.cache_data.clear())
 
 tabs = st.tabs(["🔎 Análise Algo-Trading", "💼 Carteira & Metas", "🏢 FIIs 360", "🛡️ Renda Fixa", "💰 Futuro", "🦁 Fiscal", "⚡ Opções"])
 
-# === ABA 1: ANÁLISE COMPLETA ===
+# === ABA 1: ANÁLISE ===
 with tabs[0]:
     t = st.text_input("Ticker", "MXRF11.SA").upper()
     if st.button("Analisar"):
         r = obter_dados(t)
         if r:
-            # HEADER
             st.subheader("📊 Raio-X & Segurança")
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Preço Atual", f"R$ {r.get('preco', 0):.2f}")
             c2.metric("DY Anual (Real)", f"{r.get('dy_anual', 0):.2f}%")
             
-            # Score IA
             score = r.get('score_ia', 0)
             if score == 0: c3.error("BLOQUEADO (0/100)")
             else: c3.metric("Score IA", f"{score}/100", delta=r.get('decisao_ia', '-'))
             
-            # SUGESTÃO DE ENTRADA (NOVO!)
-            entrada_tec = r.get('mme9', 0)
-            teto_bazin = r.get('p_bazin', 0)
-            c4.metric("🎯 Entrada Técnica (MME9)", f"R$ {entrada_tec:.2f}", help="Ponto ideal de entrada em tendência de alta (Pullback).")
+            # AQUI ESTÁ A CORREÇÃO (ROBÔ DE PREÇO JUSTO)
+            justo = r.get('preco_justo', 0)
+            delta_justo = (r['preco'] - justo) / justo * 100 if justo > 0 else 0
+            label_delta = f"{delta_justo:+.1f}% (Ágio)" if delta_justo > 0 else f"{delta_justo:+.1f}% (Desc)"
+            cor_delta = "inverse" if delta_justo > 0 else "normal" # Vermelho se ágio, Verde se desconto
+            
+            c4.metric("💎 Valor Justo (IA)", f"R$ {justo:.2f}", delta=label_delta, delta_color=cor_delta, help="Média ponderada de Graham e Bazin.")
             
             st.divider()
 
-            # VALUATION & INTELIGÊNCIA
             k1, k2 = st.columns(2)
-            k1.markdown("**📋 Valuation (Preço Justo)**")
+            k1.markdown("**📋 Valuation**")
             k1.table(pd.DataFrame({
                 "Modelo": ["Bazin (Teto)", "Graham (Patrim)", "Gordon (Cresc)"], 
-                "Valor": [f"R$ {teto_bazin:.2f}", f"R$ {r.get('p_graham',0):.2f}", f"R$ {r.get('p_gordon',0):.2f}"]
+                "Valor": [f"R$ {r.get('p_bazin',0):.2f}", f"R$ {r.get('p_graham',0):.2f}", f"R$ {r.get('p_gordon',0):.2f}"]
             }))
             
             k2.markdown("**🧠 Inteligência Artificial**")
@@ -125,7 +122,6 @@ with tabs[0]:
             if "⚠️" in motivos or "⛔" in motivos: k2.error(motivos)
             else: k2.info(motivos)
 
-            # PAINEL ALGO-TRADING
             st.subheader("📈 Painel Algo-Trading")
             tec1, tec2, tec3, tec4 = st.columns(4)
             tec1.metric("Tendência", r.get('sinal_tecnico', '-'))
@@ -138,7 +134,6 @@ with tabs[0]:
             tec3.metric("🛑 Stop Loss", f"R$ {r.get('stop_loss', 0):.2f}")
             tec4.metric("✅ Stop Gain", f"R$ {r.get('stop_gain', 0):.2f}")
 
-            # Tabela Detalhada
             rsi_val = r.get('rsi', 50)
             vol_val = r.get('volatilidade', 0)
             vol_rel = r.get('vol_relativo', 1.0)
@@ -147,8 +142,8 @@ with tabs[0]:
                 {"Indicador": "RSI (14)", "Valor": f"{rsi_val:.0f}", "Interpretação": "Sobrevendido (<30)" if rsi_val<30 else "Sobrecomprado (>70)" if rsi_val>70 else "Neutro"},
                 {"Indicador": "Volatilidade", "Valor": f"{vol_val*100:.1f}%", "Interpretação": "Risco de Mercado"},
                 {"Indicador": "Volume Relativo", "Valor": f"{vol_rel:.2f}x", "Interpretação": "Alto (>1.0)" if vol_rel > 1 else "Baixo"},
-                {"Indicador": "Suporte (60d)", "Valor": f"R$ {r.get('suporte', 0):.2f}", "Interpretação": "Piso Forte"},
-                {"Indicador": "Resistência (60d)", "Valor": f"R$ {r.get('resistencia', 0):.2f}", "Interpretação": "Teto Forte"}
+                {"Indicador": "Suporte", "Valor": f"R$ {r.get('suporte', 0):.2f}", "Interpretação": "Piso Forte"},
+                {"Indicador": "Resistência", "Valor": f"R$ {r.get('resistencia', 0):.2f}", "Interpretação": "Teto Forte"}
             ])
             st.dataframe(df_algo, use_container_width=True)
 
@@ -169,54 +164,33 @@ with tabs[1]:
     
     with c_right:
         st.subheader("🎯 Configuração da Estratégia")
-        st.info("Edite as porcentagens abaixo para ajustar o rebalanceamento.")
-        # Tabela editável de Metas
-        df_metas_edit = st.data_editor(
-            st.session_state.df_metas,
-            column_config={
-                "Meta (%)": st.column_config.NumberColumn("Alvo %", min_value=0, max_value=100, format="%.1f%%")
-            },
-            num_rows="dynamic",
-            use_container_width=True
-        )
+        st.info("Edite as porcentagens abaixo.")
+        df_metas_edit = st.data_editor(st.session_state.df_metas, column_config={"Meta (%)": st.column_config.NumberColumn("Alvo %", min_value=0, max_value=100, format="%.1f%%")}, num_rows="dynamic", use_container_width=True)
         st.session_state.df_metas = df_metas_edit
         
-        # Validação da soma
-        soma_metas = df_metas_edit["Meta (%)"].sum()
-        if abs(soma_metas - 100.0) > 0.1:
-            st.warning(f"⚠️ A soma das metas é {soma_metas:.1f}%. Ajuste para 100%.")
-        else:
-            st.success("✅ Estratégia Balanceada (100%)")
+        soma = df_metas_edit["Meta (%)"].sum()
+        if abs(soma - 100.0) > 0.1: st.warning(f"⚠️ Soma: {soma:.1f}%")
+        else: st.success("✅ Balanceado (100%)")
 
     with c_left:
         st.subheader("💼 Gestão de Ativos")
         if st.button("🤖 1. Classificar (IA)"): auto_classificar(); st.rerun()
         
-        # Converte o DataFrame de metas para dicionário para usar no selectbox
         lista_setores = df_metas_edit["Setor"].tolist()
-        
-        df_ed = st.data_editor(
-            st.session_state.carteira_acoes, 
-            num_rows="dynamic", 
-            use_container_width=True, 
-            column_config={
-                "Setor": st.column_config.SelectboxColumn("Setor", options=lista_setores, required=True),
-                "Qtd": st.column_config.NumberColumn("Qtd", min_value=0, format="%d"),
-                "PM": st.column_config.NumberColumn("Preço Médio", format="R$ %.2f")
-            }
-        )
+        df_ed = st.data_editor(st.session_state.carteira_acoes, num_rows="dynamic", use_container_width=True, column_config={
+            "Setor": st.column_config.SelectboxColumn("Setor", options=lista_setores, required=True),
+            "Qtd": st.column_config.NumberColumn("Qtd", min_value=0, format="%d"),
+            "PM": st.column_config.NumberColumn("Preço Médio", format="R$ %.2f")
+        })
         st.session_state.carteira_acoes = df_ed
         
         st.divider()
         aporte = st.number_input("💰 Aporte Disponível (R$)", value=5000.0)
         
         if st.button("🚀 2. Executar Rebalanceamento"):
-            if abs(soma_metas - 100.0) > 0.1:
-                st.error("Corrija as metas para somar 100% antes de rebalancear.")
+            if abs(soma - 100.0) > 0.1: st.error("Ajuste as metas para 100%.")
             else:
-                # Converte metas para dicionário pro motor entender
                 DICT_METAS = dict(zip(df_metas_edit["Setor"], df_metas_edit["Meta (%)"]))
-                
                 dados = []
                 for _, row in df_ed.iterrows():
                     d = obter_dados(row["Ticker"])
@@ -224,14 +198,11 @@ with tabs[1]:
                     else: dados.append({**row.to_dict(), "Preço": 10, "Valor_Atual": row["Qtd"]*10, "Score": 50})
                 
                 df_final = rebalancear_e_aportar(pd.DataFrame(dados), aporte, DICT_METAS)
-                
-                # Filtra compras
                 df_show = df_final[(df_final["Aporte Sugerido (R$)"] > 1) & (df_final["Score"] > 0)]
                 
-                if df_show.empty and df_final["Aporte Sugerido (R$)"].sum() > 0: 
-                    st.warning("Compras sugeridas bloqueadas por Risco (Score 0).")
+                if df_show.empty and df_final["Aporte Sugerido (R$)"].sum() > 0: st.warning("Compras sugeridas bloqueadas por Risco (Score 0).")
                 else:
-                    st.success("✅ Plano de Compra Gerado com Sucesso:")
+                    st.success("✅ Plano de Compra:")
                     st.dataframe(df_show[["Ticker", "Setor", "Score", "Aporte Sugerido (R$)"]].style.format({"Aporte Sugerido (R$)": "R$ {:.2f}"}), use_container_width=True)
 
 # === DEMAIS ABAS ===
