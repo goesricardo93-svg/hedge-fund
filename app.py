@@ -10,7 +10,7 @@ from email.mime.text import MIMEText
 # ======================================================
 # 1. CONFIGURAÇÕES
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 26.0", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 27.0", layout="wide")
 
 try:
     TELEGRAM_TOKEN = st.secrets["telegram"]["token"]
@@ -24,7 +24,7 @@ except:
     EMAIL_PASS = ""
 
 # ======================================================
-# 2. MOTOR DE ANÁLISE (AÇÕES)
+# 2. MOTOR DE ANÁLISE (CÉREBRO)
 # ======================================================
 class MotorAnalise:
     def analisar(self, hist, info, ticker):
@@ -52,9 +52,9 @@ class MotorAnalise:
             suporte = float(fechamento.tail(window).min())
             resistencia = float(fechamento.tail(window).max())
             stop_loss = suporte * 0.97
-            teto_tecnico = resistencia * 1.02
+            stop_gain = resistencia * 1.02 # Teto Técnico IA
 
-            # FUNDAMENTOS
+            # FUNDAMENTOS (DY Manual p/ evitar erros API)
             div_rate = info.get("trailingAnnualDividendRate", 0) or info.get("dividendRate", 0) or 0
             if div_rate > 0:
                 dy = div_rate / preco_atual
@@ -71,14 +71,16 @@ class MotorAnalise:
             p_graham = np.sqrt(22.5 * lpa * vpa) if (lpa > 0 and vpa > 0) else 0
             p_gordon = p_bazin
 
-            # SCORE IA
+            # SCORE IA (0-100)
             score = 50
             motivos = []
 
+            # Fundamentalista
             if p_bazin > 0 and preco_atual < p_bazin: score += 20; motivos.append("Desconto Bazin")
             if p_graham > 0 and preco_atual < p_graham: score += 20; motivos.append("Desconto Graham")
-            if dy > 0.06: score += 10; motivos.append(f"DY > 6% ({dy*100:.1f}%)")
+            if dy > 0.06: score += 10; motivos.append(f"Dividendos > 6% ({dy*100:.1f}%)")
 
+            # Técnico
             if rsi < 30: score += 20; motivos.append("RSI Sobrevendido")
             elif rsi > 70: score -= 20; motivos.append("RSI Esticado")
             if preco_atual <= suporte * 1.03: score += 10; motivos.append("Suporte Forte")
@@ -90,6 +92,7 @@ class MotorAnalise:
             elif score <= 30: decisao = "🔴 VENDA"
             else: decisao = "⚪ MANTER"
 
+            # RETORNO COMPLETO (COM TODAS AS CHAVES)
             return {
                 "preco": preco_atual,
                 "rsi": rsi,
@@ -102,7 +105,7 @@ class MotorAnalise:
                 "suporte": suporte,
                 "resistencia": resistencia,
                 "stop_loss": stop_loss,
-                "stop_gain": teto_tecnico,
+                "stop_gain": stop_gain,
                 "score_ia": score,
                 "decisao_ia": decisao,
                 "motivos": ", ".join(motivos),
@@ -127,7 +130,7 @@ class MotorAnalise:
         return np.array(resultados)
 
 # ======================================================
-# 3. FUNÇÕES DE SUPORTE
+# 3. FUNÇÕES AUXILIARES
 # ======================================================
 def formatar_ticker(ticker):
     t = ticker.strip().upper()
@@ -145,8 +148,9 @@ def disparar_alerta(titulo, corpo):
         )
     except: pass
 
+# --- NOME NOVO PARA LIMPAR O CACHE ANTIGO ---
 @st.cache_data(ttl=3600)
-def obter_dados_seguros_v14(ticker): # v14 para limpar cache
+def obter_dados_v27(ticker): 
     try:
         t_obj = yf.Ticker(ticker)
         hist = t_obj.history(period="2y")
@@ -160,7 +164,7 @@ def get_rsi_status(val):
     if val > 70: return f"🔴 SOBRECOMPRA ({val:.0f})"
     return f"⚪ NEUTRO ({val:.0f})"
 
-# === SCANNER FII COM SEGMENTAÇÃO CORRIGIDA ===
+# === SCANNER FII COM SEGMENTAÇÃO EXPANDIDA ===
 def scanner_fiis_csv(uploaded_file):
     try:
         df = pd.read_csv(uploaded_file, sep=";", encoding="latin-1")
@@ -188,70 +192,54 @@ def scanner_fiis_csv(uploaded_file):
         df["PVP_N"] = df[col_pvp].apply(limpar_numero)
         df["VAC_N"] = df[col_vac].apply(limpar_numero) if col_vac else 0
         df["LIQ_N"] = df[col_liq].apply(limpar_numero) if col_liq else 0
-        
-        # Garante string na coluna de segmento
         df["SEGMENTO_N"] = df[col_seg].astype(str).str.upper().fillna("OUTROS") if col_seg else "OUTROS"
 
-        # --- NOVA LÓGICA DE CLASSIFICAÇÃO (DICIONÁRIO DE SINÔNIMOS) ---
+        # CLASSIFICAÇÃO EXPANDIDA (PAPEL vs TIJOLO)
         def classificar_segmento(s):
-            # PAPEL: Títulos e Valores Mobiliários, Recebíveis, Papéis
-            if any(x in s for x in ["PAPEL", "RECEB", "TITULO", "TÍTULO", "VAL. MOB", "CRI", "FINANCEIRO"]): 
-                return "PAPEL"
-            # TIJOLO: Lajes, Shoppings, Logística, Híbrido, Varejo, Hospital, etc.
-            if any(x in s for x in ["TIJOLO", "SHOP", "LOG", "LAJE", "ESCRIT", "INDUSTRIAL", "HIBRIDO", "HÍBRIDO", "VAREJO", "HOSPITAL", "EDUCACIONAL", "RESIDENCIAL"]): 
-                return "TIJOLO"
-            # AGRO: Fiagro, Rural
-            if any(x in s for x in ["AGRO", "RURAL", "TERRA"]): 
-                return "AGRO"
+            # Papel
+            if any(x in s for x in ["PAPEL", "RECEB", "CRI", "CRA", "TÍTULO", "TITULO", "VAL. MOB", "FINANCEIRO"]): return "PAPEL"
+            # Tijolo
+            if any(x in s for x in ["TIJOLO", "LAJE", "LOG", "SHOP", "VAR", "HIBRIDO", "HÍBRIDO", "INDUSTRIAL", "EDUCACIONAL", "HOSPITAL"]): return "TIJOLO"
+            # Agro
+            if any(x in s for x in ["AGRO", "RURAL", "TERRA"]): return "AGRO"
             return "OUTROS"
 
         df["CATEGORIA"] = df["SEGMENTO_N"].apply(classificar_segmento)
 
-        # --- ANÁLISE FUNDAMENTALISTA DE FIIs (MOTIVOS) ---
+        # ANÁLISE FUNDAMENTALISTA (IA)
         def analisar_fii(row):
-            score = 50 # Base neutra
+            score = 50 
             motivos = []
             
-            # 1. Dividend Yield (Peso Alto)
-            if row["DY_N"] > 14: 
-                score += 5; motivos.append("DY Explosivo (Risco?)")
-            elif row["DY_N"] > 9: 
-                score += 20; motivos.append("DY Excelente")
-            elif row["DY_N"] < 6: 
-                score -= 15; motivos.append("DY Baixo")
+            # DY
+            if row["DY_N"] > 14: score += 5; motivos.append("DY Explosivo (Risco?)")
+            elif row["DY_N"] > 9: score += 20; motivos.append("DY Alto")
+            elif row["DY_N"] < 6: score -= 15; motivos.append("DY Baixo")
 
-            # 2. P/VP (Oportunidade vs Ágio)
-            if 0.85 <= row["PVP_N"] <= 1.05: 
-                score += 20; motivos.append("Preço Justo")
-            elif row["PVP_N"] < 0.80: 
-                score += 15; motivos.append("Desconto Patrimonial") 
-            elif row["PVP_N"] > 1.15: 
-                score -= 20; motivos.append("Caro (Ágio)")
+            # P/VP
+            if 0.85 <= row["PVP_N"] <= 1.05: score += 20; motivos.append("Preço Justo")
+            elif row["PVP_N"] < 0.80: score += 15; motivos.append("Desconto Patrimonial") 
+            elif row["PVP_N"] > 1.15: score -= 20; motivos.append("Caro (Ágio)")
 
-            # 3. Vacância (Apenas para Tijolo)
+            # Vacância (Só penaliza tijolo)
             if row["CATEGORIA"] == "TIJOLO":
-                if row["VAC_N"] > 15: 
-                    score -= 30; motivos.append("Vacância Crítica")
-                elif row["VAC_N"] < 5: 
-                    score += 10; motivos.append("Ocupação Alta")
+                if row["VAC_N"] > 15: score -= 30; motivos.append("Vacância Alta")
+                elif row["VAC_N"] < 5: score += 10; motivos.append("Ocupação Alta")
 
-            # 4. Liquidez
-            if row["LIQ_N"] < 200000: 
-                score -= 10; motivos.append("Baixa Liquidez")
+            # Liquidez
+            if row["LIQ_N"] < 200000: score -= 10; motivos.append("Baixa Liquidez")
             
             score = min(100, max(0, score))
             
-            # Veredito Texto
             if score >= 75: veredito = "🔥 COMPRA FORTE"
             elif score >= 60: veredito = "🟢 COMPRA"
-            elif score <= 40: veredito = "🔴 EVITAR/VENDER"
+            elif score <= 40: veredito = "🔴 EVITAR"
             else: veredito = "⚪ MANTER"
 
             return pd.Series([score, ", ".join(motivos), veredito])
 
         df[["Score", "Motivos (IA)", "Veredito"]] = df.apply(analisar_fii, axis=1)
         
-        # Colunas finais para exibição
         cols_final = [col_ticker, "CATEGORIA", col_preco, col_dy, col_pvp, "Score", "Veredito", "Motivos (IA)"]
         if col_vac: cols_final.append(col_vac)
         
@@ -262,7 +250,7 @@ def scanner_fiis_csv(uploaded_file):
         return pd.DataFrame()
 
 # ======================================================
-# 4. SESSION STATE
+# 4. SESSION STATE (SUA CARTEIRA DE 31 ATIVOS)
 # ======================================================
 if "carteira_acoes" not in st.session_state:
     dados = [
@@ -324,7 +312,7 @@ tabs = st.tabs(["🔎 Análise Técnica", "💼 Carteira Geral", "🏢 Scanner F
 # --- ABA 1: ANÁLISE ---
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
-    r = obter_dados_seguros_v14(ticker_input)
+    r = obter_dados_v27(ticker_input) # Chamada corrigida
     
     if r:
         col_ia1, col_ia2 = st.columns([1, 3])
@@ -337,6 +325,7 @@ with tabs[0]:
         st.write(f"**Gatilhos:** {r['motivos']}")
         st.divider()
 
+        # Métricas com Teto IA
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Preço Atual", f"R$ {r['preco']:.2f}")
         c2.metric("Teto (Alvo IA)", f"R$ {r['stop_gain']:.2f}") 
@@ -395,12 +384,12 @@ with tabs[1]:
         bar = st.progress(0)
         total = len(df_ed)
         for i, row in df_ed.iterrows():
-            r = obter_dados_seguros_v14(row["Ticker"])
+            r = obter_dados_v27(row["Ticker"])
             if r:
                 rec = r['decisao_ia']
                 if r['preco'] < row['PM'] * 0.95 and "COMPRA" in rec: rec = "🔥 COMPRA FORTE (Abaixo PM)"
                 
-                # Disparo de Alerta (Mantido!)
+                # Alerta
                 if r['score_ia'] >= 80 and row["Ticker"] not in st.session_state.alertas_enviados:
                     disparar_alerta(f"OPORTUNIDADE: {row['Ticker']}", f"Score: {r['score_ia']}\nPreço: {r['preco']}")
                     st.session_state.alertas_enviados.add(row["Ticker"])
@@ -419,39 +408,38 @@ with tabs[1]:
         
         if res:
             df_res = pd.DataFrame(res).sort_values("Score", ascending=False)
-            styled_df = df_res.style.background_gradient(subset=["Score"], cmap="Greens")
-            styled_df = styled_df.map(lambda x: "color: red" if x < 0 else "color: green", subset=["Lucro"])
-            st.dataframe(styled_df, use_container_width=True)
+            
+            # --- ESTILIZAÇÃO SIMPLIFICADA PARA EVITAR ERROS ---
+            def cor_lucro(val):
+                return 'color: green' if val > 0 else 'color: red'
+            
+            st.dataframe(
+                df_res.style.applymap(cor_lucro, subset=["Lucro"])
+                .background_gradient(subset=["Score"], cmap="Greens"),
+                use_container_width=True
+            )
 
 # --- ABA 3: FIIs 360 ---
 with tabs[2]:
     st.subheader("🏢 Scanner FIIs 360º")
-    st.info("Faça upload do CSV 'statusinvest-busca-avancada.csv'.")
-    uploaded = st.file_uploader("Arraste o arquivo aqui", type=["csv"])
-    
+    uploaded = st.file_uploader("Upload CSV StatusInvest", type=["csv"])
     if uploaded:
         df_fii = scanner_fiis_csv(uploaded)
         if not df_fii.empty:
-            st.success(f"{len(df_fii)} FIIs analisados com Segmentação e IA!")
+            st.success(f"{len(df_fii)} FIIs processados!")
             
-            # --- SUB-ABAS POR SEGMENTO ---
+            # ABAS DE CATEGORIA
             tab_all, tab_papel, tab_tijolo, tab_agro, tab_outros = st.tabs(["🌎 Todos", "📄 Papel", "🧱 Tijolo", "🌱 Agro", "⚙️ Outros"])
-            
             cols_view = ["TICKER", "PRECO", "DY", "P/VP", "Score", "Veredito", "Motivos (IA)"]
             
-            with tab_all:
-                st.dataframe(df_fii[cols_view].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
-            with tab_papel:
-                st.dataframe(df_fii[df_fii["CATEGORIA"]=="PAPEL"][cols_view].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
-            with tab_tijolo:
-                st.dataframe(df_fii[df_fii["CATEGORIA"]=="TIJOLO"][cols_view].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
-            with tab_agro:
-                st.dataframe(df_fii[df_fii["CATEGORIA"]=="AGRO"][cols_view].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
-            with tab_outros:
-                st.dataframe(df_fii[df_fii["CATEGORIA"]=="OUTROS"][cols_view].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
+            with tab_all: st.dataframe(df_fii[cols_view].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
+            with tab_papel: st.dataframe(df_fii[df_fii["CATEGORIA"]=="PAPEL"][cols_view].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
+            with tab_tijolo: st.dataframe(df_fii[df_fii["CATEGORIA"]=="TIJOLO"][cols_view].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
+            with tab_agro: st.dataframe(df_fii[df_fii["CATEGORIA"]=="AGRO"][cols_view].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
+            with tab_outros: st.dataframe(df_fii[df_fii["CATEGORIA"]=="OUTROS"][cols_view].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
 
         else:
-            st.warning("Erro ao ler CSV ou colunas não encontradas.")
+            st.warning("Erro ao ler CSV.")
 
 # --- ABA 4: FUTURO ---
 with tabs[3]:
