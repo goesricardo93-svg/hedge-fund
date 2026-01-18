@@ -1,17 +1,18 @@
 import pandas as pd
 import numpy as np
+import yfinance as yf
 
 class MotorAnalise:
     def analisar(self, hist, info, ticker):
         try:
             if hist is None or hist.empty: return None
 
-            # --- DADOS DE PREÇO ---
+            # DADOS
             fechamento = hist["Close"]
             if isinstance(fechamento, pd.DataFrame): fechamento = fechamento.iloc[:, 0]
             preco_atual = float(fechamento.iloc[-1])
             
-            # --- TÉCNICA ---
+            # TÉCNICA
             delta = fechamento.diff()
             gain = delta.clip(lower=0).rolling(14).mean()
             loss = -delta.clip(upper=0).rolling(14).mean()
@@ -27,16 +28,15 @@ class MotorAnalise:
             suporte = float(fechamento.tail(window).min())
             resistencia = float(fechamento.tail(window).max())
             stop_loss = suporte * 0.97
-            stop_gain = resistencia * 1.02 # Teto Técnico IA
+            stop_gain = resistencia * 1.02
 
-            # --- FUNDAMENTOS (Blindagem de DY) ---
-            # Prioridade: Cálculo manual (Div em R$ / Preço)
+            # FUNDAMENTOS (DY Manual)
             div_rate = info.get("trailingAnnualDividendRate", 0) or info.get("dividendRate", 0) or 0
             if div_rate > 0:
                 dy = div_rate / preco_atual
             else:
                 dy = info.get("dividendYield", 0) or 0
-                if dy > 2.0: dy = dy / 100 # Trava de escala
+                if dy > 2.0: dy = dy / 100
             
             lpa = info.get("trailingEps", 0) or 0
             vpa = info.get("bookValue", 0) or 0
@@ -47,16 +47,14 @@ class MotorAnalise:
             p_graham = np.sqrt(22.5 * lpa * vpa) if (lpa > 0 and vpa > 0) else 0
             p_gordon = p_bazin
 
-            # SCORE IA (0-100)
+            # SCORE IA
             score = 50
             motivos = []
 
-            # Fundamentalista
             if p_bazin > 0 and preco_atual < p_bazin: score += 20; motivos.append("Desconto Bazin")
             if p_graham > 0 and preco_atual < p_graham: score += 20; motivos.append("Desconto Graham")
             if dy > 0.06: score += 10; motivos.append(f"DY > 6% ({dy*100:.1f}%)")
 
-            # Técnico
             if rsi < 30: score += 20; motivos.append("RSI Sobrevendido")
             elif rsi > 70: score -= 20; motivos.append("RSI Esticado")
             if preco_atual <= suporte * 1.03: score += 10; motivos.append("Suporte Forte")
@@ -94,10 +92,8 @@ class MotorAnalise:
             return None
 
     def monte_carlo_carteira(self, retornos_carteira, valor_inicial, aporte_mensal, anos=10, sims=1000):
-        # Simulação Baseada na Matriz de Retornos Reais da Carteira
         if len(retornos_carteira) == 0: return np.array([])
         
-        # Média e Volatilidade da Carteira
         mu = retornos_carteira.mean().mean()
         sigma = retornos_carteira.std().mean()
         
@@ -115,3 +111,25 @@ class MotorAnalise:
                 pat = pat * (1 + retorno_mes) + aporte_mensal
             resultados.append(pat)
         return np.array(resultados)
+
+    # --- NOVO: PLUGIN DE DIVIDENDOS ---
+    def consultar_dividendos(self, ticker):
+        """Busca calendário oficial ou projeta baseado no último pagamento"""
+        try:
+            t = yf.Ticker(ticker)
+            # Tenta pegar calendário futuro
+            cal = t.calendar
+            if cal and not cal.empty:
+                # Retorna próxima data ex ou pagamento
+                return {"status": "CONFIRMADO", "data": cal.get("Dividend Date", "N/A"), "valor": "Verificar RI"}
+            
+            # Se não tiver calendário futuro, pega histórico recente
+            divs = t.dividends
+            if not divs.empty:
+                ultimo = divs.iloc[-1]
+                data = divs.index[-1].strftime('%d/%m/%Y')
+                return {"status": "ÚLTIMO PAGO", "data": data, "valor": f"R$ {ultimo:.2f}"}
+            
+            return {"status": "SEM DADOS", "data": "-", "valor": "-"}
+        except:
+            return {"status": "ERRO", "data": "-", "valor": "-"}

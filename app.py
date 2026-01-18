@@ -3,21 +3,25 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 import numpy as np
+import requests
+import smtplib
+from email.mime.text import MIMEText
 
-# Imports dos Módulos Locais
+# Imports Modulares
 try:
     from motor import MotorAnalise
     from scanner import scanner_fiis_csv
     from alerts import disparar_alerta
     from rebalance import rebalancear_e_aportar
+    from tax import calcular_darf # NOVO PLUGIN
 except ImportError as e:
-    st.error(f"Erro Crítico: Faltam arquivos modulares ({e}). Verifique motor.py, scanner.py, alerts.py, rebalance.py")
+    st.error(f"Erro Crítico: Faltam arquivos modulares ({e}).")
     st.stop()
 
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 31.0 Modular", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 31.0", layout="wide")
 
 # ======================================================
-# CACHE E UTILITÁRIOS
+# CACHE INTELIGENTE E FUNÇÕES
 # ======================================================
 @st.cache_data(ttl=3600)
 def obter_dados_v31(ticker):
@@ -27,6 +31,11 @@ def obter_dados_v31(ticker):
         if hist.empty: return None
         return MotorAnalise().analisar(hist, t.info, ticker)
     except: return None
+
+# CACHE NOVO PARA EVITAR RATE LIMIT NO MONTE CARLO
+@st.cache_data(ttl=86400) # Cache de 24 horas para histórico longo
+def download_historico_longo(tickers):
+    return yf.download(tickers, period="5y", progress=False)["Close"]
 
 def formatar_ticker(ticker):
     t = ticker.strip().upper()
@@ -40,7 +49,7 @@ def get_rsi_status(val):
     return f"⚪ NEUTRO ({val:.0f})"
 
 # ======================================================
-# CARTEIRAS (SESSION STATE)
+# SESSION STATE (CARTEIRA 31 ATIVOS)
 # ======================================================
 if "carteira_acoes" not in st.session_state:
     dados = [
@@ -79,7 +88,7 @@ if st.sidebar.button("🔄 Restaurar Padrões"):
     st.session_state.clear()
     st.rerun()
 
-tabs = st.tabs(["🔎 Análise Técnica", "💼 Carteira & Rebalanceamento", "🏢 Scanner FIIs 360", "🛡️ Renda Fixa", "💰 Futuro"])
+tabs = st.tabs(["🔎 Análise", "💼 Carteira", "🏢 FIIs 360", "🛡️ RF & PGBL", "💰 Futuro", "🦁 Fiscal"])
 
 # --- ABA 1: ANÁLISE ---
 with tabs[0]:
@@ -92,14 +101,18 @@ with tabs[0]:
         if "COMPRA" in r['decisao_ia']: col_ia2.success(f"### {r['decisao_ia']}")
         elif "VENDA" in r['decisao_ia']: col_ia2.error(f"### {r['decisao_ia']}")
         else: col_ia2.warning(f"### {r['decisao_ia']}")
+        
         st.write(f"**Gatilhos:** {r['motivos']}")
         st.divider()
 
+        # Dados de Dividendos (NOVO)
+        div_info = MotorAnalise().consultar_dividendos(ticker_input)
+        
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Preço Atual", f"R$ {r['preco']:.2f}")
         c2.metric("Teto (Alvo IA)", f"R$ {r['stop_gain']:.2f}")
         c3.metric("RSI", f"{r['rsi']:.0f}")
-        c4.metric("Volatilidade", f"{r['volatilidade']*100:.1f}%")
+        c4.metric(f"Proventos ({div_info['status']})", f"{div_info['valor']}")
 
         c_val, c_fund = st.columns(2)
         with c_val:
@@ -119,13 +132,12 @@ with tabs[0]:
                 if isinstance(close, pd.DataFrame): close = close.iloc[:,0]
                 mm50 = close.rolling(window=50).mean()
                 fig = go.Figure()
-                fig.add_trace(go.Candlestick(x=hist_chart.index, open=hist_chart["Open"].iloc[:,0] if isinstance(hist_chart["Open"], pd.DataFrame) else hist_chart["Open"], high=hist_chart["High"].iloc[:,0] if isinstance(hist_chart["High"], pd.DataFrame) else hist_chart["High"], low=hist_chart["Low"].iloc[:,0] if isinstance(hist_chart["Low"], pd.DataFrame) else hist_chart["Low"], close=close, name="Preço"))
+                fig.add_trace(go.Candlestick(x=hist_chart.index, open=hist_chart["Open"].iloc[:,0] if isinstance(hist_chart["Open"], pd.DataFrame) else hist_chart["Open"], close=close, high=hist_chart["High"].iloc[:,0] if isinstance(hist_chart["High"], pd.DataFrame) else hist_chart["High"], low=hist_chart["Low"].iloc[:,0] if isinstance(hist_chart["Low"], pd.DataFrame) else hist_chart["Low"], name="Preço"))
                 fig.add_trace(go.Scatter(x=hist_chart.index, y=mm50, name="MM50", line=dict(color='blue')))
                 fig.add_hline(y=r['suporte'], line_dash="dot", line_color="green", annotation_text="SUPORTE")
                 fig.add_hline(y=r['resistencia'], line_dash="dot", line_color="red", annotation_text="RESISTÊNCIA")
-                fig.add_hline(y=r['stop_loss'], line_dash="dash", line_color="red", annotation_text="STOP LOSS")
                 st.plotly_chart(fig, use_container_width=True)
-        except Exception as e: st.error(f"Erro gráfico: {e}")
+        except: st.error("Erro gráfico.")
     else: st.warning("Ticker não encontrado.")
 
 # --- ABA 2: CARTEIRA ---
@@ -153,11 +165,11 @@ with tabs[1]:
         
         if res:
             df_res = pd.DataFrame(res)
-            # REBALANCEAMENTO INTELIGENTE (IMPORTADO DE REBALANCE.PY)
             df_final = rebalancear_e_aportar(df_res, aporte_user)
-            
             st.success("✅ Rebalanceamento Concluído!")
-            st.dataframe(df_final[["Ticker", "Score", "Valor_Atual", "Lucro", "Veredito IA", "Aporte Sugerido (R$)"]].style.format({"Valor_Atual": "R$ {:.2f}", "Lucro": "R$ {:.2f}", "Aporte Sugerido (R$)": "R$ {:.2f}"}).background_gradient(subset=["Aporte Sugerido (R$)"], cmap="Greens"), use_container_width=True)
+            
+            def cor_lucro(val): return 'color: green' if val > 0 else 'color: red'
+            st.dataframe(df_final[["Ticker", "Score", "Valor_Atual", "Lucro", "Veredito IA", "Aporte Sugerido (R$)"]].style.applymap(cor_lucro, subset=["Lucro"]).format({"Valor_Atual": "R$ {:.2f}", "Lucro": "R$ {:.2f}", "Aporte Sugerido (R$)": "R$ {:.2f}"}).background_gradient(subset=["Aporte Sugerido (R$)"], cmap="Greens"), use_container_width=True)
 
 # --- ABA 3: FIIs 360 ---
 with tabs[2]:
@@ -169,7 +181,6 @@ with tabs[2]:
             st.success(f"{len(df_fii)} FIIs processados!")
             tab_all, tab_papel, tab_tijolo, tab_agro, tab_outros = st.tabs(["🌎 Todos", "📄 Papel", "🧱 Tijolo", "🌱 Agro", "⚙️ Outros"])
             cols = ["TICKER", "CATEGORIA", "PRECO", "DY", "P/VP", "Score", "Veredito", "Motivos (IA)"]
-            
             with tab_all: st.dataframe(df_fii[cols].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
             with tab_papel: st.dataframe(df_fii[df_fii["CATEGORIA"]=="PAPEL"][cols].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
             with tab_tijolo: st.dataframe(df_fii[df_fii["CATEGORIA"]=="TIJOLO"][cols].style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
@@ -185,7 +196,7 @@ with tabs[3]:
     st.metric("Total em Renda Fixa", f"R$ {df_rf['Saldo Atual'].sum():,.2f}")
     st.plotly_chart(go.Figure(data=[go.Pie(labels=df_rf["Ativo"], values=df_rf["Saldo Atual"], hole=.4)]), use_container_width=True)
 
-# --- ABA 5: FUTURO ---
+# --- ABA 5: FUTURO (CACHE ATIVADO) ---
 with tabs[4]:
     st.subheader("🔮 Simulação Patrimonial (Monte Carlo Real)")
     if not df_ed.empty:
@@ -197,13 +208,37 @@ with tabs[4]:
         if st.button("Simular 10 Anos"):
             tickers = df_ed["Ticker"].tolist()
             try:
-                hist = yf.download(tickers, period="5y", progress=False)["Close"]
+                # USO DE CACHE AQUI:
+                hist = download_historico_longo(tickers)
                 retornos = hist.pct_change().dropna()
                 motor = MotorAnalise()
+                
                 sims_risco = motor.monte_carlo_carteira(retornos, patr_acoes, aporte * 0.7, 10, 1000)
+                
                 meses = 120
                 rf_futuro = patr_rf * (1.008 ** meses) + (aporte * 0.3 * meses)
                 sims_total = sims_risco + rf_futuro
+                
                 st.plotly_chart(go.Figure(go.Histogram(x=sims_total, nbinsx=40, marker_color='green')), use_container_width=True)
-                st.metric("Cenário Provável (Mediana)", f"R$ {np.median(sims_total):,.2f}")
-            except: st.error("Erro na simulação.")
+                st.metric("Mediana Esperada", f"R$ {np.median(sims_total):,.2f}")
+            except Exception as e: st.error(f"Erro na simulação: {e}")
+
+# --- ABA 6: FISCAL (NOVO PLUGIN) ---
+with tabs[5]:
+    st.subheader("🦁 Calculadora de IR (DARF)")
+    st.info("Insira as vendas realizadas no mês para calcular o imposto.")
+    
+    # Template para input
+    if "df_vendas" not in st.session_state:
+        st.session_state.df_vendas = pd.DataFrame(columns=["Ticker", "Qtd", "Preço Venda", "PM"])
+    
+    df_vendas = st.data_editor(st.session_state.df_vendas, num_rows="dynamic", use_container_width=True)
+    st.session_state.df_vendas = df_vendas
+    
+    if st.button("Calcular Imposto"):
+        resultado = calcular_darf(df_vendas)
+        st.divider()
+        c1, c2 = st.columns([1, 2])
+        c1.metric("DARF a Pagar", f"R$ {resultado['darf']:.2f}")
+        c2.write(resultado["detalhes"])
+        st.table(resultado["memoria"])
