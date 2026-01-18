@@ -4,43 +4,29 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-# ======================================================
-# 1. CONFIGURAÇÃO DA PÁGINA (OBRIGATÓRIO SER A 1ª LINHA)
-# ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo v74.0", layout="wide", page_icon="💰")
+# --- 1. CONFIGURAÇÃO DA PÁGINA ---
+st.set_page_config(page_title="Hedge Fund Ricardo v77", layout="wide", page_icon="💰")
 
-# ======================================================
-# 2. IMPORTAÇÃO SEGURA (Com tratamento de erro visual)
-# ======================================================
+# --- 2. IMPORTAÇÃO ---
 try:
     from motor import MotorAnalise
     from rebalance import rebalancear_e_aportar
-    
-    # Tentativa de importar módulos opcionais
     try: from report import gerar_pdf_carteira
-    except ImportError: gerar_pdf_carteira = None
-    
+    except: gerar_pdf_carteira = None
     try: from scanner import scanner_fiis_csv, scanner_auto_yahoo
-    except ImportError: scanner_fiis_csv = None; scanner_auto_yahoo = None
-        
+    except: scanner_fiis_csv = None
     try: from tax import calcular_darf
-    except ImportError: calcular_darf = None
-    
+    except: calcular_darf = None
     try: from options import BlackScholes
-    except ImportError: BlackScholes = None
-
+    except: BlackScholes = None
 except Exception as e:
-    st.error(f"❌ ERRO CRÍTICO NO SISTEMA: {e}")
-    st.warning("Verifique se todos os arquivos (motor.py, rebalance.py, etc.) estão na mesma pasta e sem erros de escrita.")
+    st.error(f"Erro: {e}")
     st.stop()
 
-# ======================================================
-# 3. CACHE E FUNÇÕES
-# ======================================================
+# --- 3. CACHE E FUNÇÕES ---
 @st.cache_data(ttl=3600)
 def obter_dados(ticker):
-    try: 
-        return MotorAnalise().analisar(yf.Ticker(ticker).history(period="2y"), yf.Ticker(ticker).info, ticker)
+    try: return MotorAnalise().analisar(yf.Ticker(ticker).history(period="2y"), yf.Ticker(ticker).info, ticker)
     except: return None
 
 @st.cache_data(ttl=86400)
@@ -57,11 +43,9 @@ def auto_classificar():
         try: st.session_state.carteira_acoes.at[i, "Setor"] = motor.identificar_setor(yf.Ticker(row["Ticker"]).info, row["Ticker"])
         except: st.session_state.carteira_acoes.at[i, "Setor"] = "Outros"
         prog.progress((i+1)/len(st.session_state.carteira_acoes))
-    prog.empty(); st.success("Classificação Concluída!")
+    prog.empty(); st.success("OK!")
 
-# ======================================================
-# 4. ESTADO INICIAL (SESSION STATE)
-# ======================================================
+# --- 4. ESTADO ---
 if "df_metas" not in st.session_state:
     st.session_state.df_metas = pd.DataFrame([
         {"Setor": "Renda Fixa", "Meta (%)": 30.0}, {"Setor": "Exterior", "Meta (%)": 20.0},
@@ -80,27 +64,20 @@ if "carteira_acoes" not in st.session_state:
 if "carteira_rf" not in st.session_state:
     st.session_state.carteira_rf = pd.DataFrame([["Tesouro Selic", 10000.0, "Pós"]], columns=["Ativo", "Saldo Atual", "Tipo"])
 
-# ======================================================
-# 5. INTERFACE
-# ======================================================
+# --- 5. UI ---
 st.title("💰 Hedge Fund Ricardo")
 
-# Sidebar
 with st.sidebar:
-    st.header("🎮 Painel")
-    if st.button("🧹 Limpar Cache (Reset)"): 
-        st.cache_data.clear()
-        st.rerun()
+    if st.button("🧹 Limpar Cache"): st.cache_data.clear(); st.rerun()
     st.divider()
     if gerar_pdf_carteira:
-        if st.button("📄 Relatório PDF"):
+        if st.button("📄 Gerar Relatório PDF"):
             df_r = st.session_state.carteira_acoes.copy()
             if "Valor_Atual" not in df_r: df_r["Valor_Atual"] = df_r["Qtd"] * df_r["PM"]
             total = st.session_state.carteira_rf["Saldo Atual"].sum() + df_r["Valor_Atual"].sum()
             metas = dict(zip(st.session_state.df_metas["Setor"], st.session_state.df_metas["Meta (%)"]))
-            try:
-                st.download_button("📥 Baixar", gerar_pdf_carteira(df_r, st.session_state.carteira_rf, total, metas), "Relatorio.pdf", "application/pdf")
-            except Exception as e: st.error(f"Erro PDF: {e}")
+            try: st.download_button("📥 Baixar", gerar_pdf_carteira(df_r, st.session_state.carteira_rf, total, metas), "Relatorio.pdf", "application/pdf")
+            except: st.error("Erro PDF")
 
 tabs = st.tabs(["🔎 Análise", "💼 Carteira", "🏢 FIIs 360", "🛡️ RF", "💰 Futuro", "🦁 Fiscal", "⚡ Opções"])
 
@@ -110,27 +87,24 @@ with tabs[0]:
     if st.button("Analisar"):
         r = obter_dados(t)
         if r:
-            # Header
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Preço", f"R$ {r.get('preco',0):.2f}")
             c2.metric("DY Anual", f"{r.get('dy_anual',0):.2f}%")
-            if r.get('score_ia',0)==0: c3.error("BLOQUEADO (0/100)")
+            if r.get('score_ia',0)==0: c3.error("BLOQUEADO")
             else: c3.metric("Score IA", f"{r.get('score_ia',0)}", delta=r.get('decisao_ia',''))
             
-            # Valor Justo
             justo = r.get('preco_justo', 0)
-            delta_j = (r['preco'] - justo)/justo*100 if justo > 0 else 0
-            c4.metric("Valor Justo (IA)", f"R$ {justo:.2f}", delta=f"{delta_j:+.1f}%", delta_color="inverse")
+            if justo > 0:
+                delta_j = (r['preco'] - justo)/justo*100
+                c4.metric("Valor Justo (IA)", f"R$ {justo:.2f}", delta=f"{delta_j:+.1f}%", delta_color="inverse")
+            else: c4.metric("Valor Justo", "N/A")
             
             st.divider()
-            
-            # Valuation
             k1, k2 = st.columns(2)
             k1.table(pd.DataFrame({"Modelo": ["Bazin", "Graham", "Gordon"], "Teto": [f"R$ {r.get('p_bazin',0):.2f}", f"R$ {r.get('p_graham',0):.2f}", f"R$ {r.get('p_gordon',0):.2f}"]}))
             if "⚠️" in r.get('motivos','') or "⛔" in r.get('motivos',''): k2.error(r.get('motivos',''))
             else: k2.info(r.get('motivos',''))
             
-            # Algo Trading
             st.subheader("📈 Algo-Trading")
             t1, t2, t3, t4 = st.columns(4)
             t1.metric("Tendência", r.get('sinal_tecnico','-'))
@@ -147,7 +121,7 @@ with tabs[0]:
             ]), use_container_width=True)
             
             components.html(f"""<script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({{"width":"100%","height":500,"symbol":"BMFBOVESPA:{t.replace('.SA','')}","interval":"D","theme":"light"}});</script>""", height=500)
-        else: st.error("Ativo não encontrado.")
+        else: st.error("Não encontrado.")
 
 # ABA 2: CARTEIRA
 with tabs[1]:
@@ -179,18 +153,18 @@ with tabs[2]:
     if "Automático" in modo:
         if st.button("🚀 Rodar Análise 360"):
             if scanner_auto_yahoo: 
-                with st.spinner("Analisando mercado (Isso leva uns segundos)..."):
+                with st.spinner("Analisando (Aguarde)..."):
                     df_s = scanner_auto_yahoo()
-                    if not df_s.empty and "Score IA" in df_s.columns:
+                    if not df_s.empty:
                         st.dataframe(df_s, use_container_width=True, column_config={
                             "Score IA": st.column_config.ProgressColumn("Score", min_value=0, max_value=100, format="%d"),
                             "Preço": st.column_config.NumberColumn(format="R$ %.2f"),
                             "Valor Justo": st.column_config.NumberColumn(format="R$ %.2f"),
-                            "Desconto (%)": st.column_config.NumberColumn(format="%.1f%%")
+                            "Upside (%)": st.column_config.NumberColumn(format="%.1f%%"),
+                            "P/VP": st.column_config.NumberColumn(format="%.2f")
                         })
-                    else:
-                        st.dataframe(df_s)
-            else: st.error("Erro: scanner.py antigo ou incompleto.")
+                    else: st.warning("Sem resultados.")
+            else: st.error("Erro: scanner.py")
     else:
         up = st.file_uploader("CSV", type=["csv"])
         if up and scanner_fiis_csv: st.dataframe(scanner_fiis_csv(up))
@@ -217,8 +191,7 @@ with tabs[6]:
             cc1, cc2 = st.columns([1,3])
             cc1.metric(f"Prêmio {tipo}", f"R$ {preco:.2f}")
             cc2.write(pd.DataFrame([gr]))
-        except Exception as e:
-            st.error(f"Erro cálculo: {e}. Verifique options.py")
+        except Exception as e: st.error(f"Erro cálculo: {e}")
     else: st.error("Módulo options.py não encontrado.")
 
 # Demais abas
