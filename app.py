@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components # Novo import para TradingView
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
@@ -19,13 +20,13 @@ except ImportError as e:
     st.error(f"Erro Crítico de Arquitetura: Faltam arquivos modulares. Detalhes: {e}")
     st.stop()
 
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 44.0", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 45.0 (TradingView)", layout="wide")
 
 # ======================================================
 # 2. CACHE E FUNÇÕES UTILITÁRIAS
 # ======================================================
 @st.cache_data(ttl=3600)
-def obter_dados_v44(ticker): 
+def obter_dados_v45(ticker): 
     try:
         t = yf.Ticker(ticker)
         hist = t.history(period="2y")
@@ -46,6 +47,37 @@ def formatar_ticker(ticker):
     if t in ["BTC", "ETH", "SOL", "USDT"]: return f"{t}-USD"
     if any(char.isdigit() for char in t) and "." not in t: return f"{t}.SA"
     return t
+
+def renderizar_tradingview_widget(ticker):
+    """Renderiza o Gráfico Profissional do TradingView"""
+    tv_symbol = ticker
+    # Adaptação para B3
+    if ".SA" in ticker:
+        clean = ticker.replace(".SA", "")
+        tv_symbol = f"BMFBOVESPA:{clean}"
+    # Adaptação para Cripto
+    elif "-USD" in ticker:
+        clean = ticker.replace("-USD", "")
+        tv_symbol = f"BINANCE:{clean}USDT"
+    
+    html_code = f"""
+    <div class="tradingview-widget-container">
+      <div id="tradingview_chart"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+      <script type="text/javascript">
+      new TradingView.widget(
+      {{
+        "width": "100%", "height": 500, "symbol": "{tv_symbol}",
+        "interval": "D", "timezone": "America/Sao_Paulo", "theme": "light",
+        "style": "1", "locale": "br", "toolbar_bg": "#f1f3f6",
+        "enable_publishing": false, "allow_symbol_change": false,
+        "container_id": "tradingview_chart"
+      }}
+      );
+      </script>
+    </div>
+    """
+    components.html(html_code, height=500)
 
 # ======================================================
 # 3. ESTADO DA SESSÃO
@@ -88,7 +120,7 @@ if (hoje.day == 1 or forcar_envio) and f"report_{mes_str}" not in st.session_sta
         try:
             res_auto = []
             for _, row in st.session_state.carteira_acoes.iterrows():
-                r = obter_dados_v44(row["Ticker"])
+                r = obter_dados_v45(row["Ticker"])
                 if r:
                     res_auto.append({
                         "Ticker": row["Ticker"],
@@ -123,19 +155,17 @@ if st.sidebar.button("🔄 Restaurar Padrões"):
 
 tabs = st.tabs(["🔎 Análise", "💼 Carteira", "🏢 FIIs 360", "🛡️ RF & PGBL", "💰 Futuro", "🦁 Fiscal"])
 
-# --- ABA 1: ANÁLISE (VISUALIZAÇÃO DE DIVIDENDOS DUPLA) ---
+# --- ABA 1: ANÁLISE (COM TRADINGVIEW) ---
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
     motor = MotorAnalise()
-    r = obter_dados_v44(ticker_input)
+    r = obter_dados_v45(ticker_input)
     
     if r:
         div_info = motor.consultar_dividendos(ticker_input)
         
-        # Cor do box baseada se tem agenda futura ou não
+        # Box Proventos (Duplo: Passado/Futuro)
         cor_box = "green" if div_info['status'] == "AGENDA" else "blue"
-        
-        # HTML para mostrar PASSADO e FUTURO
         st.markdown(f"""
         <div style="padding:15px; border-radius:10px; background-color:rgba(0,100,0,0.05); border:1px solid {cor_box}; margin-bottom:15px;">
             <h4 style="margin-top:0; color:{cor_box};">💰 Relatório de Proventos</h4>
@@ -182,39 +212,11 @@ with tabs[0]:
                 "Valor": [f"{r['dy']*100:.2f}%", f"{r['pl']:.2f}", f"{r['pvp']:.2f}", f"{r['roe']*100:.1f}%", f"{r['divida_ebitda']:.2f}x"]
             }), use_container_width=True)
 
-        st.subheader("📈 Gráfico Técnico")
-        try:
-            hist = yf.download(ticker_input, period="2y", progress=False)
-            if not hist.empty:
-                def fix_data(col_name):
-                    if col_name in hist.columns:
-                        d = hist[col_name]
-                        if isinstance(d, pd.DataFrame): return d.iloc[:, 0]
-                        return d
-                    return hist.iloc[:, 0]
+        st.divider()
+        st.subheader("📈 Gráfico Profissional (TradingView)")
+        renderizar_tradingview_widget(ticker_input)
 
-                open_p = fix_data("Open")
-                high_p = fix_data("High")
-                low_p = fix_data("Low")
-                close_p = fix_data("Close")
-                
-                mm50 = close_p.rolling(window=50).mean()
-                mm200 = close_p.rolling(window=200).mean()
-                
-                fig = go.Figure()
-                fig.add_trace(go.Candlestick(
-                    x=hist.index,
-                    open=open_p, high=high_p, low=low_p, close=close_p,
-                    name="Preço"
-                ))
-                fig.add_trace(go.Scatter(x=hist.index, y=mm50, name="MM50 (Curto)", line=dict(color='blue', width=1)))
-                fig.add_trace(go.Scatter(x=hist.index, y=mm200, name="MM200 (Longo)", line=dict(color='orange', width=1)))
-                
-                fig.add_hline(y=r['suporte'], line_dash="dot", line_color="green", annotation_text="SUPORTE")
-                fig.add_hline(y=r['resistencia'], line_dash="dot", line_color="red", annotation_text="RESISTÊNCIA")
-                st.plotly_chart(fig, use_container_width=True)
-        except Exception as e: st.error(f"Erro ao carregar gráfico: {e}")
-    else: st.warning("Ativo não encontrado.")
+    else: st.warning("Ativo não encontrado ou Yahoo Finance instável. Tente limpar o cache.")
 
 # --- ABA 2: CARTEIRA ---
 with tabs[1]:
@@ -230,7 +232,7 @@ with tabs[1]:
         bar = st.progress(0)
         total = len(df_ed)
         for i, row in df_ed.iterrows():
-            r = obter_dados_v44(row["Ticker"])
+            r = obter_dados_v45(row["Ticker"])
             if r:
                 rec = r['decisao_ia']
                 if r['preco'] < row['PM'] * 0.95 and r['score_ia'] > 60: rec = "🔥 COMPRA (Abaixo PM)"
@@ -304,12 +306,10 @@ with tabs[4]:
             motor = MotorAnalise()
             prop = real_acoes / (real_acoes + real_rf) if (real_acoes + real_rf) > 0 else 1.0
             sim_risco = motor.monte_carlo_carteira(retornos, sim_ini * prop, sim_apt * prop, 10, 1000)
-            
             meses = 120
             taxa_rf = 0.008
             rf_base = (sim_ini * (1-prop)) * ((1 + taxa_rf) ** meses)
             rf_apts = (sim_apt * (1-prop)) * (((1 + taxa_rf) ** meses - 1) / taxa_rf)
-            
             total = sim_risco + rf_base + rf_apts
             st.plotly_chart(go.Figure(go.Histogram(x=total, nbinsx=50, marker_color='green')), use_container_width=True)
             k1, k2, k3 = st.columns(3)
