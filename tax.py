@@ -1,54 +1,54 @@
 import pandas as pd
+import yfinance as yf
 
-def calcular_darf(df_vendas):
-    """
-    Calcula o imposto devido (DARF) baseado nas regras da B3:
-    - FIIs: 20% sobre o lucro (sem isenção).
-    - Ações (Swing Trade): 15% sobre o lucro (isento se vendas totais < R$ 20k).
-    """
-    if df_vendas.empty:
-        return {"darf": 0.0, "detalhes": "Sem vendas registradas.", "memoria": pd.DataFrame()}
-
-    # Separação por Tipo
-    df = df_vendas.copy()
+def calcular_darf(df_carteira):
+    if df_carteira.empty: return pd.DataFrame([{"Status": "Carteira Vazia"}])
+    df = df_carteira.copy()
     
-    # Identifica se é FII ou Ação pela terminação ou lista conhecida (simplificação robusta)
-    def identificar_tipo(ticker):
-        if "11" in ticker: return "FII" # Maioria dos FIIs termina em 11 (Generalização segura p/ MVP)
-        return "ACAO"
-
-    df["Tipo"] = df["Ticker"].apply(identificar_tipo)
-    df["Valor_Venda"] = df["Qtd"] * df["Preço Venda"]
-    df["Custo_Aquisicao"] = df["Qtd"] * df["PM"]
-    df["Lucro"] = df["Valor_Venda"] - df["Custo_Aquisicao"]
-
-    # 1. Cálculo FIIs
-    vendas_fii = df[df["Tipo"] == "FII"]
-    lucro_fii = vendas_fii["Lucro"].sum()
-    imposto_fii = max(0, lucro_fii * 0.20) if lucro_fii > 0 else 0
-
-    # 2. Cálculo Ações
-    vendas_acao = df[df["Tipo"] == "ACAO"]
-    total_venda_acao = vendas_acao["Valor_Venda"].sum()
-    lucro_acao = vendas_acao["Lucro"].sum()
-    
-    # Regra de Isenção 20k
-    if total_venda_acao < 20000 and lucro_acao > 0:
-        imposto_acao = 0
-        msg_acao = "ISENTO (< 20k)"
+    # Baixa preço atual se não tiver
+    if "Valor_Atual" not in df.columns:
+        try:
+            tickers = df["Ticker"].tolist()
+            data = yf.download(tickers, period="1d", progress=False)['Close'].iloc[-1]
+            def get_p(t): 
+                try: return float(data[t]) if isinstance(data, pd.Series) else float(data)
+                except: return 0.0
+            df["Preço Venda"] = df["Ticker"].apply(get_p)
+        except: return pd.DataFrame([{"Erro": "Falha cotação online"}])
     else:
-        imposto_acao = max(0, lucro_acao * 0.15) if lucro_acao > 0 else 0
-        msg_acao = "TRIBUTADO (15%)"
+        df["Preço Venda"] = df["Valor_Atual"] / df["Qtd"]
 
-    darf_total = imposto_fii + imposto_acao
+    df["Total Venda"] = df["Qtd"] * df["Preço Venda"]
+    df["Lucro"] = df["Total Venda"] - (df["Qtd"] * df["PM"])
 
-    resumo = pd.DataFrame([
-        {"Categoria": "FIIs", "Total Venda": vendas_fii["Valor_Venda"].sum(), "Lucro Líquido": lucro_fii, "Imposto": imposto_fii, "Status": "20% Flat"},
-        {"Categoria": "Ações", "Total Venda": total_venda_acao, "Lucro Líquido": lucro_acao, "Imposto": imposto_acao, "Status": msg_acao}
-    ])
+    def get_aliquota(row):
+        t = row["Ticker"].upper()
+        # FIIs = 20%
+        if "11" in t and not any(x in t for x in ["IVVB", "BOVA", "XINA", "BDR"]): return 0.20
+        return 0.15 # Ações e ETFs de Ações
 
-    return {
-        "darf": darf_total,
-        "detalhes": f"Total a Pagar: R$ {darf_total:.2f}",
-        "memoria": resumo
-    }
+    df["Aliq"] = df.apply(get_aliquota, axis=1)
+    
+    # Resumo
+    res = []
+    # FIIs
+    fiis = df[df["Aliq"] == 0.20]
+    lucro_fii = fiis["Lucro"].sum()
+    res.append({"Tipo": "FIIs (20%)", "Lucro": f"R$ {lucro_fii:.2f}", "Imposto": f"R$ {max(0, lucro_fii*0.2):.2f}"})
+    
+    # Ações
+    acoes = df[df["Aliq"] == 0.15]
+    lucro_acao = acoes["Lucro"].sum()
+    venda_acao = acoes["Total Venda"].sum()
+    imposto_acao = 0.0
+    obs = "Tributado"
+    
+    if lucro_acao > 0:
+        if venda_acao < 20000 and "IVVB" not in str(acoes["Ticker"].values): 
+            obs = "Isento (<20k)"
+        else: 
+            imposto_acao = lucro_acao * 0.15
+            
+    res.append({"Tipo": f"Ações/ETF (15%) - {obs}", "Lucro": f"R$ {lucro_acao:.2f}", "Imposto": f"R$ {imposto_acao:.2f}"})
+    
+    return pd.DataFrame(res)
