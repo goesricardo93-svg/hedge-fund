@@ -9,11 +9,10 @@ import datetime
 from email.mime.text import MIMEText
 
 # ======================================================
-# 1. CONFIGURAÇÕES & BLINDAGEM DE SEGREDOS
+# 1. CONFIGURAÇÕES GERAIS
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 8.0", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 9.0", layout="wide")
 
-# Tenta carregar segredos, se não existirem, usa valores vazios para não quebrar
 try:
     TELEGRAM_TOKEN = st.secrets["telegram"]["token"]
     TELEGRAM_CHAT_ID = st.secrets["telegram"]["chat_id"]
@@ -29,90 +28,75 @@ SMTP_SERVER = "smtp.office365.com"
 SMTP_PORT = 587
 
 # ======================================================
-# 2. MOTOR DE ANÁLISE (CÉREBRO)
+# 2. MOTOR DE ANÁLISE (COMPLETO)
 # ======================================================
 class MotorAnalise:
     def analisar(self, hist, info, ticker):
         try:
             if hist is None or hist.empty: return None
 
-            # --- PREPARAÇÃO DOS DADOS ---
-            # Garante que estamos usando Series unidimensionais
+            # --- DADOS DE PREÇO ---
+            # Correção para garantir série unidimensional
             fechamento = hist["Close"]
             if isinstance(fechamento, pd.DataFrame): fechamento = fechamento.iloc[:, 0]
-            
             preco_atual = fechamento.iloc[-1]
             
             # --- TÉCNICA ---
-            # RSI (14 períodos)
+            # RSI
             delta = fechamento.diff()
             gain = delta.clip(lower=0).rolling(14).mean()
             loss = -delta.clip(upper=0).rolling(14).mean()
             rs = gain / loss
             rsi = 100 - (100 / (1 + rs.iloc[-1]))
             
-            # Volatilidade e Drawdown
+            # Volatilidade & Drawdown
             retornos = fechamento.pct_change().dropna()
             volatilidade = retornos.std() * (252 ** 0.5)
             topo = fechamento.cummax()
             drawdown = ((fechamento - topo) / topo).min() * 100
 
-            # --- FUNDAMENTOS (VALUATION) ---
+            # Níveis Técnicos (Suporte e Resistência 60d)
+            window = 60 
+            suporte = fechamento.tail(window).min()
+            resistencia = fechamento.tail(window).max()
+            stop_loss = suporte * 0.97 # 3% abaixo do suporte
+            stop_gain = resistencia * 1.02 # 2% acima da resistência
+
+            # --- FUNDAMENTOS ---
             dy = info.get("dividendYield", 0) or 0
             lpa = info.get("trailingEps", 0) or 0
             vpa = info.get("bookValue", 0) or 0
+            roe = info.get("returnOnEquity", 0) or 0
+            pl = info.get("trailingPE", 0) or 0
+            pvp = info.get("priceToBook", 0) or 0
+            margem = info.get("profitMargins", 0) or 0
+            divida_ebitda = info.get("debtToEbitda", 0) or 0
             
-            # 1. Bazin (Preço Teto de Dividendos - 6%)
+            # Valuation
             dpa = preco_atual * dy
             p_bazin = dpa / 0.06 if dpa > 0 else 0
-            
-            # 2. Graham (Valor Intrínseco Patrimonial)
             p_graham = np.sqrt(22.5 * lpa * vpa) if (lpa > 0 and vpa > 0) else 0
             
-            # 3. Gordon (Modelo de Crescimento)
-            # Proxy conservador: usa Bazin como base ou projeta crescimento de 2%
-            k = 0.08 # Custo de capital
-            g = 0.02 # Crescimento perpétuo
-            p_gordon = (dpa * (1+g)) / (k - g) if (dpa > 0 and k > g) else p_bazin
+            # Gordon (Proxy via Bazin para simplificação robusta)
+            p_gordon = p_bazin
 
-            # --- SUPORTE E RESISTÊNCIA (Técnico) ---
-            window = 60 # 3 meses
-            suporte = fechamento.tail(window).min()
-            resistencia = fechamento.tail(window).max()
-            stop_loss = suporte * 0.95
-            stop_gain = resistencia * 1.05
-
-            # --- SCORE IA (0-100) ---
-            score = 50 # Base neutra
+            # --- IA DE DECISÃO (SCORE) ---
+            score = 50
             motivos = []
 
-            # Critérios Fundamentalistas (+ peso)
-            if p_bazin > 0 and preco_atual < p_bazin:
-                score += 20
-                motivos.append("Desconto Bazin")
-            if p_graham > 0 and preco_atual < p_graham:
-                score += 20
-                motivos.append("Desconto Graham")
-            if dy > 0.06:
-                score += 10
-                motivos.append("Dividendos > 6%")
-
-            # Critérios Técnicos
-            if rsi < 30:
-                score += 20
-                motivos.append("RSI Sobrevendido (Oportunidade)")
-            elif rsi > 70:
-                score -= 20
-                motivos.append("RSI Esticado (Risco)")
+            # Pontos Positivos
+            if p_bazin > 0 and preco_atual < p_bazin: score += 20; motivos.append("Desconto Bazin")
+            if p_graham > 0 and preco_atual < p_graham: score += 20; motivos.append("Desconto Graham")
+            if rsi < 30: score += 20; motivos.append("RSI Sobrevendido")
+            if dy > 0.06: score += 10; motivos.append("Dividendos Altos")
             
-            if preco_atual <= suporte * 1.02:
-                score += 10
-                motivos.append("Testando Suporte")
+            # Pontos Negativos
+            if rsi > 70: score -= 20; motivos.append("RSI Sobrecomprado")
+            if preco_atual > resistencia: score -= 10; motivos.append("Topo Histórico")
 
             score = min(100, max(0, score))
 
-            # Decisão Final
-            if score >= 80: decisao = "🟢🟢 COMPRA FORTE"
+            if score >= 75: decisao = "🟢🟢 COMPRA FORTE"
             elif score >= 60: decisao = "🟢 COMPRA"
             elif score <= 30: decisao = "🔴 VENDA"
             else: decisao = "⚪ MANTER"
@@ -126,13 +110,18 @@ class MotorAnalise:
                 "p_graham": p_graham,
                 "p_gordon": p_gordon,
                 "dy": dy,
+                "roe": roe,
+                "pl": pl,
+                "pvp": pvp,
+                "margem": margem,
+                "divida_ebitda": divida_ebitda,
                 "suporte": suporte,
                 "resistencia": resistencia,
                 "stop_loss": stop_loss,
                 "stop_gain": stop_gain,
                 "score_ia": score,
                 "decisao_ia": decisao,
-                "motivos": ", ".join(motivos) if motivos else "Neutro"
+                "motivos": ", ".join(motivos)
             }
         except Exception as e:
             print(f"Erro Motor: {e}")
@@ -163,7 +152,7 @@ class MotorAnalise:
         return dados
 
 # ======================================================
-# 3. FUNÇÕES AUXILIARES E ALERTAS
+# 3. FUNÇÕES AUXILIARES
 # ======================================================
 def disparar_alerta(titulo, corpo):
     if not TELEGRAM_TOKEN: return
@@ -193,21 +182,16 @@ def sugerir_aportes(df, aporte, metas_setor):
     if df.empty: return pd.DataFrame()
     df = df.copy()
     
-    # Pesos atuais
     df["Valor"] = df["Qtd"] * df["Cotação"]
     total = df["Valor"].sum() or 1
     df["Peso_Atual"] = df["Valor"] / total
     
-    # Metas
     dict_metas = dict(zip(metas_setor["Setor"], metas_setor["Meta"]))
     df["Meta_Setorial"] = df["Setor"].map(dict_metas).fillna(0.05)
     qtd_por_setor = df.groupby("Setor")["Ticker"].transform("count")
     df["Peso_Alvo"] = df["Meta_Setorial"] / qtd_por_setor
-    
-    # Gap
     df["Gap"] = df["Peso_Alvo"] - df["Peso_Atual"]
     
-    # Score ponderado para alocação
     score_val = df["Score IA"] if "Score IA" in df.columns else 50
     df["Score_Alocacao"] = ((df["Gap"] * 200) + (score_val / 100)).clip(lower=0)
     
@@ -224,7 +208,6 @@ def scanner_fiis_csv(uploaded_file):
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c].astype(str).str.replace("%","").str.replace(".","").str.replace(",","."), errors='coerce')
         
-        # Score FII
         df["Score"] = 0
         df.loc[df["DY"] > 8, "Score"] += 40
         df.loc[(df["P/VP"] > 0.8) & (df["P/VP"] < 1.05), "Score"] += 40
@@ -234,7 +217,7 @@ def scanner_fiis_csv(uploaded_file):
         return pd.DataFrame()
 
 # ======================================================
-# 4. SESSION STATE (DADOS DA CARTEIRA)
+# 4. SESSION STATE
 # ======================================================
 if "carteira_acoes" not in st.session_state:
     st.session_state.carteira_acoes = pd.DataFrame([
@@ -265,24 +248,43 @@ if "alertas_enviados" not in st.session_state:
     st.session_state.alertas_enviados = set()
 
 # ======================================================
-# 5. INTERFACE (FRONTEND)
+# 5. INTERFACE (O APP)
 # ======================================================
 st.sidebar.title("📊 Hedge Fund Ricardo")
+
+# --- SIDEBAR: METAS (REINSERIDA AQUI) ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("🎯 Metas por Setor (%)")
+# Tabela editável lateral
+df_metas = st.sidebar.data_editor(
+    st.session_state.metas_setor,
+    num_rows="dynamic",
+    key="editor_metas_sidebar"
+)
+st.session_state.metas_setor = df_metas
+
+# Validação visual
+soma_metas = df_metas["Meta"].sum()
+if abs(soma_metas - 1.0) > 0.01:
+    st.sidebar.warning(f"⚠️ Soma: {soma_metas*100:.0f}% (Ideal: 100%)")
+else:
+    st.sidebar.success("✅ Metas Balanceadas")
+
 st.sidebar.markdown("---")
 ticker_input = st.sidebar.text_input("🔍 Analisar Ticker:", "BBAS3.SA").upper()
 
 tabs = st.tabs(["🔎 Análise Completa", "💼 Carteira & Ranking", "🏢 Scanner FIIs", "💰 Futuro (Monte Carlo)"])
 
-# --- ABA 1: ANÁLISE TÉCNICA E FUNDAMENTALISTA ---
+# --- ABA 1: ANÁLISE TÉCNICA E FUNDAMENTALISTA (COMPLETA) ---
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
     r = obter_dados(ticker_input)
     
     if r:
-        # PAINEL IA DE DECISÃO
+        # 1. PAINEL DE INTELIGÊNCIA ARTIFICIAL
         st.info("🧠 **Análise da Inteligência Artificial**")
         col_ia1, col_ia2 = st.columns([1, 3])
-        col_ia1.metric("Score IA (0-100)", r['score_ia'])
+        col_ia1.metric("Score IA", f"{r['score_ia']}/100")
         
         if "COMPRA" in r['decisao_ia']:
             col_ia2.success(f"### {r['decisao_ia']}")
@@ -294,14 +296,14 @@ with tabs[0]:
         st.write(f"**Gatilhos:** {r['motivos']}")
         st.divider()
 
-        # MÉTRICAS TÉCNICAS E DE PREÇO
+        # 2. MÉTRICAS DE PREÇO E RISCO
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Preço Atual", f"R$ {r['preco']:.2f}")
         c2.metric("Volatilidade", f"{r['volatilidade']*100:.1f}%")
         c3.metric("Drawdown Max", f"{r['drawdown']:.1f}%", delta_color="inverse")
         c4.markdown(f"**{get_rsi_status(r['rsi'])}**")
 
-        # TABELA DE VALUATION COMPLETA
+        # 3. TABELA DE VALUATION COMPLETA
         st.subheader("📋 Valuation: O Preço é Justo?")
         val_data = {
             "Modelo": ["Decio Bazin (Div.)", "Ben. Graham (Patr.)", "Gordon (Cresc.)"],
@@ -314,22 +316,31 @@ with tabs[0]:
         }
         st.dataframe(pd.DataFrame(val_data), use_container_width=True)
 
-        # GRÁFICO TÉCNICO COM PREÇO OSCILANDO E LINHAS
-        st.subheader("📈 Análise Gráfica")
+        # 4. TABELA DE FUNDAMENTOS ADICIONAIS
+        st.subheader("📊 Indicadores Fundamentalistas")
+        fund_data = {
+            "Indicador": ["DY (%)", "P/L", "P/VP", "ROE (%)", "Margem Líquida (%)", "Dívida/EBITDA"],
+            "Valor": [
+                f"{r['dy']*100:.2f}%", f"{r['pl']:.2f}", f"{r['pvp']:.2f}", 
+                f"{r['roe']*100:.1f}%", f"{r['margem']*100:.1f}%", f"{r['divida_ebitda']:.2f}"
+            ]
+        }
+        st.table(pd.DataFrame(fund_data).T)
+
+        # 5. GRÁFICO TÉCNICO COMPLETO
+        st.subheader("📈 Análise Gráfica (Setup)")
         try:
             hist_chart = yf.download(ticker_input, period="2y", progress=False)
             if not hist_chart.empty:
-                # Tratamento de dados para gráfico
                 fechamento = hist_chart["Close"]
                 if isinstance(fechamento, pd.DataFrame): fechamento = fechamento.iloc[:,0]
                 
-                # Médias Móveis
                 mm20 = fechamento.rolling(20).mean()
                 mm50 = fechamento.rolling(50).mean()
 
                 fig = go.Figure()
                 
-                # Candlestick (Preço oscilando real)
+                # Candlestick
                 fig.add_trace(go.Candlestick(
                     x=hist_chart.index,
                     open=hist_chart["Open"] if "Open" in hist_chart else hist_chart.iloc[:,0],
@@ -339,24 +350,28 @@ with tabs[0]:
                     name="Preço"
                 ))
 
-                # Médias Móveis
+                # Médias
                 fig.add_trace(go.Scatter(x=hist_chart.index, y=mm20, name="MM20", line=dict(color='orange', width=1)))
                 fig.add_trace(go.Scatter(x=hist_chart.index, y=mm50, name="MM50", line=dict(color='blue', width=1)))
                 
-                # Suportes e Resistências
-                fig.add_hline(y=r['suporte'], line_dash="dot", line_color="green", annotation_text="SUPORTE")
-                fig.add_hline(y=r['resistencia'], line_dash="dot", line_color="red", annotation_text="RESISTÊNCIA")
-                
-                # Stops da Estratégia
-                fig.add_hline(y=r['stop_loss'], line_dash="dash", line_color="red", annotation_text="STOP LOSS")
-                fig.add_hline(y=r['stop_gain'], line_dash="dash", line_color="gold", annotation_text="ALVO")
-                
-                # Preço Justo Bazin
-                if r['p_bazin'] > 0:
-                     fig.add_hline(y=r['p_bazin'], line_dash="dash", line_color="purple", annotation_text="TETO BAZIN")
+                # Linhas Técnicas (REINSERIDAS)
+                fig.add_hline(y=r['suporte'], line_dash="dot", line_color="green", annotation_text=f"SUPORTE {r['suporte']:.2f}")
+                fig.add_hline(y=r['resistencia'], line_dash="dot", line_color="red", annotation_text=f"RESISTÊNCIA {r['resistencia']:.2f}")
+                fig.add_hline(y=r['stop_loss'], line_dash="dash", line_color="red", annotation_text=f"STOP LOSS {r['stop_loss']:.2f}")
+                fig.add_hline(y=r['stop_gain'], line_dash="dash", line_color="gold", annotation_text=f"ALVO {r['stop_gain']:.2f}")
 
-                fig.update_layout(height=600, xaxis_rangeslider_visible=False, template="plotly_white")
+                fig.update_layout(height=600, xaxis_rangeslider_visible=False, template="plotly_white", title=f"Setup Técnico: {ticker_input}")
                 st.plotly_chart(fig, use_container_width=True)
+                
+                # Tabela de Setup Técnico (REINSERIDA)
+                st.info(f"""
+                **🎯 Setup Técnico:**
+                * **Suporte:** R$ {r['suporte']:.2f}
+                * **Resistência:** R$ {r['resistencia']:.2f}
+                * **Stop Loss Sugerido:** R$ {r['stop_loss']:.2f}
+                * **Stop Gain (Alvo):** R$ {r['stop_gain']:.2f}
+                """)
+                
         except Exception as e:
             st.error(f"Erro ao gerar gráfico: {e}")
 
@@ -369,51 +384,38 @@ with tabs[1]:
     df_ed = st.data_editor(st.session_state.carteira_acoes, num_rows="dynamic", use_container_width=True)
     st.session_state.carteira_acoes = df_ed
 
-    col_rank, col_risk = st.columns([2, 1])
+    if st.button("🔄 Gerar Ranking e Alertas"):
+        res = []
+        bar = st.progress(0)
+        total = len(df_ed)
+        for i, row in df_ed.iterrows():
+            r = obter_dados(row["Ticker"])
+            if r:
+                if r['score_ia'] >= 75 and row["Ticker"] not in st.session_state.alertas_enviados:
+                    disparar_alerta(f"TOP PICK: {row['Ticker']}", f"Score: {r['score_ia']}\nPreço: {r['preco']:.2f}")
+                    st.session_state.alertas_enviados.add(row["Ticker"])
+                    st.toast(f"Alerta enviado: {row['Ticker']}")
 
-    with col_rank:
-        if st.button("🔄 Gerar Ranking e Alertas"):
-            res = []
-            bar = st.progress(0)
-            total = len(df_ed)
-            for i, row in df_ed.iterrows():
-                r_rank = obter_dados(row["Ticker"])
-                if r_rank:
-                    # Disparo de Alerta se for oportunidade
-                    if r_rank['score_ia'] >= 75 and row["Ticker"] not in st.session_state.alertas_enviados:
-                        disparar_alerta(f"TOP PICK: {row['Ticker']}", f"Score: {r_rank['score_ia']}\nPreço: {r_rank['preco']:.2f}")
-                        st.session_state.alertas_enviados.add(row["Ticker"])
-                        st.toast(f"Alerta enviado: {row['Ticker']}")
-
-                    res.append({
-                        "Ticker": row["Ticker"],
-                        "Preço": f"R$ {r_rank['preco']:.2f}",
-                        "Score IA": r_rank['score_ia'],
-                        "Decisão": r_rank['decisao_ia'],
-                        "Bazin": f"R$ {r_rank['p_bazin']:.2f}",
-                        "Graham": f"R$ {r_rank['p_graham']:.2f}"
-                    })
-                bar.progress((i+1)/total)
-            
-            df_rank = pd.DataFrame(res).sort_values("Score IA", ascending=False)
-            st.dataframe(df_rank.style.background_gradient(subset=["Score IA"], cmap="Greens"), use_container_width=True)
-    
-    with col_risk:
-        st.write("#### 📉 Stress Test")
-        pat = 100000 # Valor fixo ou calculado
-        if st.button("Simular Crises"):
-            motor = MotorAnalise()
-            res_stress = motor.stress_test(pat)
-            fig_stress = go.Figure()
-            for k, v in res_stress.items(): fig_stress.add_trace(go.Scatter(y=v, name=k))
-            st.plotly_chart(fig_stress, use_container_width=True)
-            
-    st.divider()
-    st.write("#### 🤖 Sugestão de Aporte Inteligente")
-    val = st.number_input("Valor do Aporte (R$)", 1000.0)
-    if st.button("Calcular Distribuição"):
-        sug = sugerir_aportes(df_rank if 'df_rank' in locals() else pd.DataFrame(), val, st.session_state.metas_setor)
-        st.dataframe(sug, use_container_width=True)
+                res.append({
+                    "Ticker": row["Ticker"],
+                    "Preço": r["preco"],
+                    "Score IA": r['score_ia'],
+                    "Decisão": r['decisao_ia'],
+                    "Bazin": r["p_bazin"],
+                    "Graham": r["p_graham"],
+                    "DY": f"{r['dy']*100:.2f}%"
+                })
+            bar.progress((i+1)/total)
+        
+        df_rank = pd.DataFrame(res).sort_values("Score IA", ascending=False)
+        st.dataframe(df_rank.style.background_gradient(subset=["Score IA"], cmap="Greens"), use_container_width=True)
+        
+        st.divider()
+        st.write("#### 🤖 Sugestão de Aporte Inteligente (Considera Metas da Sidebar)")
+        val = st.number_input("Valor do Aporte (R$)", 1000.0)
+        if st.button("Calcular Distribuição"):
+            sug = sugerir_aportes(df_rank if 'df_rank' in locals() else pd.DataFrame(), val, st.session_state.metas_setor)
+            st.dataframe(sug, use_container_width=True)
 
 # --- ABA 3: FIIs ---
 with tabs[2]:
@@ -423,8 +425,8 @@ with tabs[2]:
     if uploaded:
         df_fii = scanner_fiis_csv(uploaded)
         if not df_fii.empty:
-            st.success(f"{len(df_fii)} FIIs filtrados por critérios de qualidade (DY > 8%, P/VP equilibrado, Vacância baixa).")
-            st.dataframe(df_fii[["TICKER", "PRECO", "DY", "P/VP", "Score", "SEGMENTO"]].head(20).style.background_gradient(subset=["Score"], cmap="Blues"), use_container_width=True)
+            st.success(f"{len(df_fii)} FIIs filtrados.")
+            st.dataframe(df_fii[["TICKER", "PRECO", "DY", "P/VP", "Score"]].head(20).style.background_gradient(subset=["Score"], cmap="Blues"), use_container_width=True)
 
 # --- ABA 4: FUTURO ---
 with tabs[3]:
