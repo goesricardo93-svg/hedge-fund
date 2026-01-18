@@ -4,13 +4,14 @@ import yfinance as yf
 
 class MotorAnalise:
     def identificar_setor(self, info, ticker):
-        # 1. LISTA VIP (Garante acerto em FIIs conhecidos)
+        # LISTA VIP (Garante acerto)
         TIJOLO_VIP = ['XPML11.SA', 'VISC11.SA', 'MALL11.SA', 'HGBS11.SA', 'CPSH11.SA', 'HGLG11.SA', 'BTLG11.SA', 'XPLG11.SA', 'VILG11.SA', 'LVBI11.SA', 'HGRU11.SA', 'KNRI11.SA', 'HGRE11.SA', 'JSRE11.SA', 'BRCO11.SA', 'TRXF11.SA', 'ALZR11.SA', 'GGRC11.SA']
         PAPEL_VIP = ['MXRF11.SA', 'KNCR11.SA', 'CPTS11.SA', 'RECR11.SA', 'IRDM11.SA', 'KNIP11.SA', 'HGCR11.SA', 'VGIR11.SA', 'CVBI11.SA', 'KNSC11.SA']
+        
         if ticker in TIJOLO_VIP: return "FIIs-Tijolo"
         if ticker in PAPEL_VIP: return "FIIs-Papel"
 
-        # 2. IA CONTEXTUAL
+        # IA DE CONTEXTO
         industry = (info.get('industry', '') or '').lower()
         summary = (info.get('longBusinessSummary', '') or '').lower()
         name = (info.get('longName', '') or '').lower()
@@ -18,8 +19,10 @@ class MotorAnalise:
         if ticker.endswith('11.SA') and ticker not in ['IVVB11.SA', 'BOVA11.SA', 'XINA11.SA', 'BDRX19.SA']:
             tijolo_kws = ['shopping', 'mall', 'logística', 'logistics', 'galpão', 'warehouse', 'laje', 'corporativo', 'urbana', 'hospital', 'imóveis', 'properties', 'real estate', 'predial']
             if any(kw in industry or kw in summary or kw in name for kw in tijolo_kws): return "FIIs-Tijolo"
+            
             papel_kws = ['recebíveis', 'cri', 'cra', 'papel', 'paper', 'debt', 'dívida', 'crédito', 'fund of funds', 'fof', 'títulos', 'financeiro', 'security']
             if any(kw in industry or kw in summary or kw in name for kw in papel_kws): return "FIIs-Papel"
+            
             return "FIIs-Outros"
 
         if ticker in ['IVVB11.SA', 'BDRX19.SA'] or not ticker.endswith('.SA'): return "Exterior"
@@ -33,12 +36,14 @@ class MotorAnalise:
         try:
             if hist is None or hist.empty: return None
             
+            # Dados Básicos
             fechamento = hist["Close"].iloc[:, 0] if isinstance(hist["Close"], pd.DataFrame) else hist["Close"]
             volume = hist["Volume"].iloc[:, 0] if isinstance(hist["Volume"], pd.DataFrame) else hist["Volume"]
+            
             if len(fechamento) < 30: return None
             preco_atual = float(fechamento.iloc[-1])
 
-            # --- 1. TÉCNICA ---
+            # --- 1. TÉCNICA (ALGO-TRADING) ---
             mme9 = fechamento.ewm(span=9, adjust=False).mean()
             mme21 = fechamento.ewm(span=21, adjust=False).mean()
             
@@ -65,7 +70,7 @@ class MotorAnalise:
             stop_loss = suporte * 0.97
             stop_gain = resistencia * 1.02
 
-            # --- 2. DIVIDENDOS ---
+            # --- 2. DIVIDENDOS (REAL) ---
             try:
                 t = yf.Ticker(ticker); divs = t.dividends
                 if not divs.empty:
@@ -76,7 +81,7 @@ class MotorAnalise:
                 else: dy_mensal, dy_anual = 0.0, 0.0
             except: dy_mensal, dy_anual = 0.0, (info.get('dividendYield') or 0.0) * 100
 
-            # --- 3. VALUATION & ROBÔ DE PREÇO JUSTO ---
+            # --- 3. VALUATION ---
             def safe_get(key, default=0.0): return float(info.get(key) or default)
             lpa = safe_get("trailingEps")
             vpa = safe_get("bookValue")
@@ -86,8 +91,7 @@ class MotorAnalise:
             p_graham = np.sqrt(22.5 * lpa * vpa) if (lpa > 0 and vpa > 0) else 0
             p_gordon = p_bazin 
 
-            # CÁLCULO DO VALOR JUSTO (IA)
-            # Média entre Graham e Bazin (se ambos existirem), ou usa o que tiver
+            # ROBÔ DE PREÇO JUSTO (Média inteligente)
             validos = [x for x in [p_bazin, p_graham] if x > 0]
             preco_justo = sum(validos) / len(validos) if validos else 0
 
@@ -112,21 +116,20 @@ class MotorAnalise:
                 if pvp > 1.05: score -= 10; alertas.append(f"FII Caro (P/VP {pvp:.2f})")
                 if "Papel" in setor_ativo and pvp > 1.02: score = 0; alertas.append("⛔ ÁGIO EM PAPEL")
 
-            # Pontos
+            # Pontuação
             tendencia = "ALTA" if mme9.iloc[-1] > mme21.iloc[-1] else "BAIXA"
             if tendencia == "ALTA": score += 15; motivos.append("Tendência Alta")
             else: score -= 15
             
             status_macd = "COMPRA" if macd_line.iloc[-1] > signal_line.iloc[-1] else "VENDA"
             if status_macd == "COMPRA": score += 5; motivos.append("MACD Positivo")
-            
-            # Bônus Valuation
+            if vol_relativo > 1.2: score += 5; motivos.append("Volume Forte")
+
+            # Valuation Score
             if preco_justo > 0 and preco_atual < preco_justo: 
-                score += 15
-                motivos.append("Abaixo do Valor Justo")
-            elif preco_justo > 0: 
-                score -= 10
-            
+                score += 15; motivos.append("Abaixo Valor Justo")
+            elif preco_justo > 0: score -= 10
+
             if dy_anual > 6.0: score += 10; motivos.append(f"DY {dy_anual:.1f}%")
             if rsi < 30: score += 10; motivos.append("RSI Sobrevendido")
 
@@ -139,7 +142,7 @@ class MotorAnalise:
                 "decisao_ia": "🟢 COMPRA" if score >= 60 else "🔴 AGUARDAR",
                 "motivos": ", ".join(motivos) + (" | ⚠️ " + ", ".join(alertas) if alertas else ""),
                 "p_bazin": p_bazin, "p_graham": p_graham, "p_gordon": p_gordon,
-                "preco_justo": preco_justo, # NOVA MÉTRICA
+                "preco_justo": preco_justo,
                 "dy_mensal": dy_mensal, "dy_anual": dy_anual,
                 "mme9": mme9.iloc[-1], "mme21": mme21.iloc[-1], "tendencia": tendencia,
                 "macd": macd_line.iloc[-1], "macd_signal": signal_line.iloc[-1], "status_macd": status_macd,
