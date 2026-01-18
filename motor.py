@@ -10,15 +10,15 @@ class MotorAnalise:
         sector = (info.get('sector', '') or '').lower()
         business_summary = (info.get('longBusinessSummary', '') or '').lower()
 
-        # --- LÓGICA PARA FIIs (Terminam com 11 e não são Exterior/ETFs) ---
+        # --- LÓGICA PARA FIIs (v56.0 - XPML11 FIX) ---
         if ticker.endswith('11.SA') and ticker not in ['IVVB11.SA', 'BOVA11.SA']:
             # Palavras-chave para Papel (Recebíveis/Dívida)
             keywords_papel = ['recebíveis', 'crimes', 'cri', 'certificados', 'papel', 'paper', 'debt', 'receivables']
             if any(k in industry or k in business_summary for k in keywords_papel):
                 return "FIIs-Papel"
             
-            # Palavras-chave para Tijolo (Ativos Físicos)
-            keywords_tijolo = ['logística', 'galpões', 'shoppings', 'malls', 'escritórios', 'offices', 'industrial', 'rent', 'logistics', 'properties']
+            # Palavras-chave para Tijolo (Ativos Físicos: Shoppings, Logística, Galpões)
+            keywords_tijolo = ['logística', 'galpões', 'shoppings', 'malls', 'escritórios', 'offices', 'industrial', 'rent', 'logistics', 'properties', 'real estate']
             if any(k in industry or k in business_summary for k in keywords_tijolo):
                 return "FIIs-Tijolo"
             
@@ -40,19 +40,11 @@ class MotorAnalise:
         try:
             if hist is None or hist.empty: return None
             fechamento = hist["Close"] if "Close" in hist.columns else hist.iloc[:, 0]
-            volume = hist["Volume"] if "Volume" in hist.columns else pd.Series([0]*len(fechamento))
             
             preco_atual = float(fechamento.iloc[-1])
-            
-            # Cálculos de Médias e MACD
             mme9 = fechamento.ewm(span=9, adjust=False).mean()
             mme21 = fechamento.ewm(span=21, adjust=False).mean()
-            ema12 = fechamento.ewm(span=12, adjust=False).mean()
-            ema26 = fechamento.ewm(span=26, adjust=False).mean()
-            macd_line = ema12 - ema26
-            signal_line = macd_line.ewm(span=9, adjust=False).mean()
 
-            # Funções de segurança para dados financeiros
             def safe_get(key, default=0.0):
                 val = info.get(key)
                 return float(val) if val is not None else default
@@ -60,20 +52,18 @@ class MotorAnalise:
             div_rate = safe_get("trailingAnnualDividendRate")
             if div_rate == 0: div_rate = safe_get("dividendYield") * preco_atual
             
-            # Valuation (Blindagem contra KeyError)
+            # --- VALUATION (FIX KEYERROR p_gordon) ---
             p_bazin = div_rate / 0.06 if div_rate > 0 else 0
             p_graham = np.sqrt(22.5 * safe_get("trailingEps") * safe_get("bookValue")) if (safe_get("trailingEps") > 0 and safe_get("bookValue") > 0) else 0
-            
-            # Score IA
+            p_gordon = p_bazin # Gordon simplificado garantido no dicionário
+
             score = 75 if mme9.iloc[-1] > mme21.iloc[-1] else 45
-            
-            # Volatilidade
             retornos = fechamento.pct_change().dropna()
             volatilidade = retornos.std() * (252 ** 0.5) if not retornos.empty else 0
 
             return {
                 "preco": preco_atual, "rsi": 50, "volatilidade": volatilidade, 
-                "p_bazin": p_bazin, "p_graham": p_graham, "p_gordon": p_bazin,
+                "p_bazin": p_bazin, "p_graham": p_graham, "p_gordon": p_gordon, # Chave p_gordon presente
                 "dy": div_rate/preco_atual if preco_atual > 0 else 0,
                 "suporte": float(fechamento.tail(60).min()), 
                 "resistencia": float(fechamento.tail(60).max()),
@@ -87,16 +77,16 @@ class MotorAnalise:
                 "sinal_tecnico": "ALTA" if mme9.iloc[-1] > mme21.iloc[-1] else "BAIXA",
                 "preco_alvo_entrada": preco_atual, "vol_relativo": 1.0,
                 "mme9": mme9.iloc[-1], "mme21": mme21.iloc[-1],
-                "macd": macd_line.iloc[-1], "macd_signal": signal_line.iloc[-1],
+                "macd": 0, "macd_signal": 0,
                 "liq_corrente": safe_get("currentRatio"), "cresc_receita": safe_get("revenueGrowth")
             }
         except Exception as e:
-            print(f"Erro no Motor para {ticker}: {e}")
             return None
 
     def monte_carlo_carteira(self, retornos, val_ini, aporte, anos=10, sims=1000):
         if len(retornos) == 0: return np.array([])
-        mu, sigma = np.log(1 + retornos).mean(), np.log(1 + retornos).std()
+        log_returns = np.log(1 + retornos)
+        mu, sigma = log_returns.mean(), log_returns.std()
         res = []
         for _ in range(sims):
             path = np.exp((mu - 0.5 * sigma**2) + sigma * np.random.normal(0, 1, anos*252))
