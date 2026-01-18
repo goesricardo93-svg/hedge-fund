@@ -1,65 +1,65 @@
 import pandas as pd
 
-def rebalancear_e_aportar(df, aporte_total, metas_setores=None):
+def rebalancear_e_aportar(df, aporte_total, metas_setores):
     """
-    df: DataFrame com colunas [Ticker, Preço, Qtd, Valor_Atual, Score, Setor]
-    aporte_total: Valor em R$ para aportar
-    metas_setores: Dict com {Setor: %_Alvo} ex: {'Ações': 40, 'Exterior': 20...}
+    Distribui o aporte total para atingir as metas percentuais,
+    priorizando ativos com maior Score IA dentro de cada setor.
     """
     df = df.copy()
-    
-    # 1. Prepara colunas básicas
     if "Aporte Sugerido (R$)" not in df.columns:
         df["Aporte Sugerido (R$)"] = 0.0
     
     patrimonio_atual = df["Valor_Atual"].sum()
-    patrimonio_final = patrimonio_atual + aporte_total
+    patrimonio_final_estimado = patrimonio_atual + aporte_total
     
-    # Se não tiver metas definidas, usa a lógica antiga (Score Puro)
-    if not metas_setores:
-        df["Peso_Score"] = df["Score"] / df["Score"].sum()
-        df["Alocacao_Ideal"] = patrimonio_final * df["Peso_Score"]
-        df["Diferenca"] = df["Alocacao_Ideal"] - df["Valor_Atual"]
-        
-        saldo_restante = aporte_total
-        df = df.sort_values(by="Diferenca", ascending=False)
-        
-        for idx, row in df.iterrows():
-            if saldo_restante <= 0: break
-            if row["Diferenca"] > 0:
-                compra = min(row["Diferenca"], saldo_restante)
-                df.at[idx, "Aporte Sugerido (R$)"] = compra
-                saldo_restante -= compra
-                
-        return df
-
-    # 2. Lógica Setorial (Nova)
-    # Calcula quanto $$ deveria ter em cada setor
-    distribuicao_setor = {}
+    # 1. Calcula quanto cada setor DEVERIA ter no final
+    alvos_reais = {}
+    deficit_setor = {}
+    
     for setor, pct in metas_setores.items():
-        alvo_reais = patrimonio_final * (pct / 100)
-        atual_reais = df[df["Setor"] == setor]["Valor_Atual"].sum()
-        falta = alvo_reais - atual_reais
-        distribuicao_setor[setor] = max(0, falta) # Só considera se precisa comprar
-
-    # Normaliza para caber no aporte
-    total_necessario = sum(distribuicao_setor.values())
-    if total_necessario == 0: total_necessario = 1 # Evita div zero
-
-    # Distribui o aporte entre os SETORES primeiro
-    for setor, falta in distribuicao_setor.items():
-        # Quanto deste aporte vai para este setor?
-        grana_setor = (falta / total_necessario) * aporte_total
+        alvo = patrimonio_final_estimado * (pct / 100)
+        alvos_reais[setor] = alvo
         
-        if grana_setor > 0:
-            # Agora distribui DENTRO do setor baseado no Score IA
-            ativos_setor = df[df["Setor"] == setor].copy()
-            if not ativos_setor.empty:
-                total_score = ativos_setor["Score"].sum()
+        # Quanto tem hoje?
+        atual = df[df["Setor"] == setor]["Valor_Atual"].sum()
+        
+        # Quanto falta para chegar no alvo? (Deficit)
+        deficit = max(0, alvo - atual)
+        deficit_setor[setor] = deficit
+    
+    total_deficit = sum(deficit_setor.values())
+    
+    # 2. Distribui o aporte proporcionalmente ao "buraco" (deficit) de cada setor
+    # Se o buraco for maior que o aporte, enchemos o proporcional.
+    # Se for menor, a lógica garante que usamos tudo baseando no peso relativo.
+    
+    if total_deficit == 0: return df # Carteira já perfeita ou vazia
+    
+    sobra_aporte = aporte_total
+    
+    for setor, falta in deficit_setor.items():
+        if falta > 0:
+            # Regra de 3: Se faltam 10k no total de setores, e 2k nesse setor,
+            # ele recebe 20% do aporte disponível.
+            pct_do_aporte = falta / total_deficit
+            dinheiro_para_setor = aporte_total * pct_do_aporte
+            
+            # Agora distribui esse dinheiro DENTRO do setor
+            ativos = df[df["Setor"] == setor]
+            
+            if not ativos.empty:
+                # Usa o Score IA para ponderar. Quem tem score maior, recebe mais.
+                total_score = ativos["Score"].sum()
+                
                 if total_score > 0:
-                    for idx, row in ativos_setor.iterrows():
-                        peso = row["Score"] / total_score
-                        valor_compra = grana_setor * peso
-                        df.at[idx, "Aporte Sugerido (R$)"] += valor_compra
+                    for idx, row in ativos.iterrows():
+                        peso_ativo = row["Score"] / total_score
+                        valor_compra = dinheiro_para_setor * peso_ativo
+                        df.at[idx, "Aporte Sugerido (R$)"] = valor_compra
+                else:
+                    # Se ninguém tem score (tudo zero), divide igual
+                    divisao_igual = dinheiro_para_setor / len(ativos)
+                    for idx in ativos.index:
+                        df.at[idx, "Aporte Sugerido (R$)"] = divisao_igual
 
     return df
