@@ -10,7 +10,7 @@ from email.mime.text import MIMEText
 # ======================================================
 # 1. CONFIGURAÇÕES & SEGREDOS
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 15.0", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 16.0", layout="wide")
 
 try:
     TELEGRAM_TOKEN = st.secrets["telegram"]["token"]
@@ -223,25 +223,24 @@ def scanner_fiis_csv(uploaded_file):
         return pd.DataFrame()
 
 # ======================================================
-# 4. LISTA DE ATIVOS OFICIAL (31 ATIVOS)
+# 4. SESSION STATE (SUA CARTEIRA OFICIAL)
 # ======================================================
-LISTA_31_ATIVOS = [
-    ["ALZR11.SA", 100, 10.81], ["BBAS3.SA", 1703, 24.48], ["BBSE3.SA", 55, 35.64],
-    ["BTCI11.SA", 502, 10.16], ["BTLG11.SA", 60, 98.50], ["CCME11.SA", 152, 8.55],
-    ["CMIG4.SA", 1644, 11.12], ["CPLE3.SA", 617, 9.64], ["CPSH11.SA", 169, 10.10],
-    ["CPTS11.SA", 276, 8.52], ["CXSE3.SA", 800, 14.20], ["EQTL3.SA", 200, 30.21],
-    ["HGCR11.SA", 20, 95.81], ["HGLG11.SA", 20, 158.03], ["ITSA4.SA", 1174, 9.63],
-    ["IVVB11.SA", 6, 366.97], ["KLBN4.SA", 2323, 3.63], ["KNCR11.SA", 27, 103.11],
-    ["KNHF11.SA", 15, 93.23], ["KNRI11.SA", 30, 152.49], ["KNSC11.SA", 373, 8.78],
-    ["KNUQ11.SA", 16, 102.45], ["PETR4.SA", 900, 32.07], ["SAPR11.SA", 300, 37.97],
-    ["TAEE4.SA", 1000, 11.36], ["VALE3.SA", 152, 54.79], ["VGIR11.SA", 296, 9.58],
-    ["VISC11.SA", 16, 109.70], ["XPCA11.SA", 110, 8.77], ["XPLG11.SA", 26, 102.31],
-    ["XPML11.SA", 10, 106.05]
-]
-
-# Inicializa Session State (se não existir)
 if "carteira_acoes" not in st.session_state:
-    st.session_state.carteira_acoes = pd.DataFrame(LISTA_31_ATIVOS, columns=["Ticker", "Qtd", "PM"])
+    # LISTA INTEGRAL DO USUÁRIO
+    dados = [
+        ["ALZR11.SA", 100, 10.81], ["BBAS3.SA", 1703, 24.48], ["BBSE3.SA", 55, 35.64],
+        ["BTCI11.SA", 502, 10.16], ["BTLG11.SA", 60, 98.50], ["CCME11.SA", 152, 8.55],
+        ["CMIG4.SA", 1644, 11.12], ["CPLE3.SA", 617, 9.64], ["CPSH11.SA", 169, 10.10],
+        ["CPTS11.SA", 276, 8.52], ["CXSE3.SA", 800, 14.20], ["EQTL3.SA", 200, 30.21],
+        ["HGCR11.SA", 20, 95.81], ["HGLG11.SA", 20, 158.03], ["ITSA4.SA", 1174, 9.63],
+        ["IVVB11.SA", 6, 366.97], ["KLBN4.SA", 2323, 3.63], ["KNCR11.SA", 27, 103.11],
+        ["KNHF11.SA", 15, 93.23], ["KNRI11.SA", 30, 152.49], ["KNSC11.SA", 373, 8.78],
+        ["KNUQ11.SA", 16, 102.45], ["PETR4.SA", 900, 32.07], ["SAPR11.SA", 300, 37.97],
+        ["TAEE4.SA", 1000, 11.36], ["VALE3.SA", 152, 54.79], ["VGIR11.SA", 296, 9.58],
+        ["VISC11.SA", 16, 109.70], ["XPCA11.SA", 110, 8.77], ["XPLG11.SA", 26, 102.31],
+        ["XPML11.SA", 10, 106.05]
+    ]
+    st.session_state.carteira_acoes = pd.DataFrame(dados, columns=["Ticker", "Qtd", "PM"])
 
 if "alertas_enviados" not in st.session_state:
     st.session_state.alertas_enviados = set()
@@ -250,15 +249,26 @@ if "alertas_enviados" not in st.session_state:
 # 5. INTERFACE
 # ======================================================
 st.sidebar.title("📊 Hedge Fund Ricardo")
-
-# --- BOTÃO MÁGICO PARA RESTAURAR A LISTA ---
-if st.sidebar.button("🔄 Restaurar Carteira Padrão (31 Ativos)"):
-    st.session_state.carteira_acoes = pd.DataFrame(LISTA_31_ATIVOS, columns=["Ticker", "Qtd", "PM"])
-    st.rerun()
-
 ticker_input = st.sidebar.text_input("🔍 Analisar Ticker:", "BBAS3.SA").upper()
 
-tabs = st.tabs(["🔎 Análise Técnica", "💼 Carteira (31 Ativos)", "🏢 Scanner FIIs 360", "💰 Futuro"])
+if st.sidebar.button("🔄 Restaurar Carteira Padrão"):
+    dados = [
+        ["ALZR11.SA", 100, 10.81], ["BBAS3.SA", 1703, 24.48], ["BBSE3.SA", 55, 35.64],
+        ["BTCI11.SA", 502, 10.16], ["BTLG11.SA", 60, 98.50], ["CCME11.SA", 152, 8.55],
+        ["CMIG4.SA", 1644, 11.12], ["CPLE3.SA", 617, 9.64], ["CPSH11.SA", 169, 10.10],
+        ["CPTS11.SA", 276, 8.52], ["CXSE3.SA", 800, 14.20], ["EQTL3.SA", 200, 30.21],
+        ["HGCR11.SA", 20, 95.81], ["HGLG11.SA", 20, 158.03], ["ITSA4.SA", 1174, 9.63],
+        ["IVVB11.SA", 6, 366.97], ["KLBN4.SA", 2323, 3.63], ["KNCR11.SA", 27, 103.11],
+        ["KNHF11.SA", 15, 93.23], ["KNRI11.SA", 30, 152.49], ["KNSC11.SA", 373, 8.78],
+        ["KNUQ11.SA", 16, 102.45], ["PETR4.SA", 900, 32.07], ["SAPR11.SA", 300, 37.97],
+        ["TAEE4.SA", 1000, 11.36], ["VALE3.SA", 152, 54.79], ["VGIR11.SA", 296, 9.58],
+        ["VISC11.SA", 16, 109.70], ["XPCA11.SA", 110, 8.77], ["XPLG11.SA", 26, 102.31],
+        ["XPML11.SA", 10, 106.05]
+    ]
+    st.session_state.carteira_acoes = pd.DataFrame(dados, columns=["Ticker", "Qtd", "PM"])
+    st.rerun()
+
+tabs = st.tabs(["🔎 Análise Técnica", "💼 Carteira Geral", "🏢 Scanner FIIs 360", "💰 Futuro"])
 
 # --- ABA 1: ANÁLISE ---
 with tabs[0]:
@@ -303,12 +313,18 @@ with tabs[0]:
                 close = hist_chart["Close"]
                 if isinstance(close, pd.DataFrame): close = close.iloc[:,0]
                 
+                # Média Móvel 50
+                mm50 = close.rolling(window=50).mean()
+
                 fig = go.Figure()
                 fig.add_trace(go.Candlestick(x=hist_chart.index, open=hist_chart["Open"].iloc[:,0] if isinstance(hist_chart["Open"], pd.DataFrame) else hist_chart["Open"],
                                             high=hist_chart["High"].iloc[:,0] if isinstance(hist_chart["High"], pd.DataFrame) else hist_chart["High"],
                                             low=hist_chart["Low"].iloc[:,0] if isinstance(hist_chart["Low"], pd.DataFrame) else hist_chart["Low"],
                                             close=close, name="Preço"))
                 
+                # AQUI FOI A CORREÇÃO PRINCIPAL:
+                fig.add_trace(go.Scatter(x=hist_chart.index, y=mm50, name="MM50", line=dict(color='blue', width=1)))
+
                 fig.add_hline(y=r['suporte'], line_dash="dot", line_color="green", annotation_text="SUPORTE")
                 fig.add_hline(y=r['resistencia'], line_dash="dot", line_color="red", annotation_text="RESISTÊNCIA")
                 fig.add_hline(y=r['stop_loss'], line_dash="dash", line_color="red", annotation_text="STOP LOSS")
@@ -321,8 +337,6 @@ with tabs[0]:
 # --- ABA 2: CARTEIRA ---
 with tabs[1]:
     st.subheader(f"💼 Gestão de Carteira ({len(st.session_state.carteira_acoes)} Ativos)")
-    st.caption("Se a lista estiver incompleta, clique no botão 'Restaurar Carteira' na barra lateral.")
-    
     df_ed = st.data_editor(st.session_state.carteira_acoes, num_rows="dynamic", use_container_width=True)
     st.session_state.carteira_acoes = df_ed
 
@@ -334,6 +348,7 @@ with tabs[1]:
             r = obter_dados_seguros_v4(row["Ticker"])
             if r:
                 rec = r['decisao_ia']
+                # Recomendação simples baseada em PM
                 if r['preco'] < row['PM'] * 0.95 and "COMPRA" in rec: rec = "🔥 COMPRA FORTE (Abaixo PM)"
                 
                 res.append({
@@ -354,24 +369,26 @@ with tabs[1]:
 # --- ABA 3: FIIs 360 ---
 with tabs[2]:
     st.subheader("🏢 Scanner FIIs 360º")
-    st.info("Faça upload do CSV do StatusInvest. O sistema usará sua lógica de Papel vs Tijolo.")
+    st.info("Faça upload do CSV do StatusInvest. O sistema calculará o Score IA automaticamente.")
     
     uploaded = st.file_uploader("Arraste o arquivo aqui", type=["csv"])
     if uploaded:
         df_fii = scanner_fiis_csv(uploaded)
         if not df_fii.empty:
-            st.success(f"{len(df_fii)} FIIs processados!")
+            st.success(f"{len(df_fii)} FIIs processados com sucesso!")
+            # Mostra as melhores oportunidades primeiro
             st.dataframe(df_fii.head(30).style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
         else:
-            st.warning("Erro ao ler CSV.")
+            st.warning("Erro ao ler CSV. Verifique se é o arquivo correto do StatusInvest.")
 
 # --- ABA 4: FUTURO ---
 with tabs[3]:
     st.subheader("🔮 Simulação Patrimonial")
     if not df_ed.empty:
+        # Calcula patrimônio atual real da carteira
         patrimonio_atual = 0
         for _, row in df_ed.iterrows():
-            patrimonio_atual += row['Qtd'] * row['PM']
+            patrimonio_atual += row['Qtd'] * row['PM'] # Aproximação pelo PM
         
         st.metric("Patrimônio Base (Custo)", f"R$ {patrimonio_atual:,.2f}")
         aporte = st.number_input("Aporte Mensal", 2000.0)
