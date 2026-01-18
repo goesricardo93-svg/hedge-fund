@@ -10,7 +10,7 @@ from email.mime.text import MIMEText
 # ======================================================
 # 1. CONFIGURAÇÕES & SEGREDOS
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 20.0", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 21.0", layout="wide")
 
 try:
     TELEGRAM_TOKEN = st.secrets["telegram"]["token"]
@@ -24,19 +24,19 @@ except:
     EMAIL_PASS = ""
 
 # ======================================================
-# 2. MOTOR DE ANÁLISE (COM CORREÇÃO DE DY MANUAL)
+# 2. MOTOR DE ANÁLISE (CÉREBRO)
 # ======================================================
 class MotorAnalise:
     def analisar(self, hist, info, ticker):
         try:
             if hist is None or hist.empty: return None
 
-            # --- DADOS DE PREÇO ---
+            # DADOS
             fechamento = hist["Close"]
             if isinstance(fechamento, pd.DataFrame): fechamento = fechamento.iloc[:, 0]
             preco_atual = float(fechamento.iloc[-1])
             
-            # --- TÉCNICA ---
+            # TÉCNICA
             delta = fechamento.diff()
             gain = delta.clip(lower=0).rolling(14).mean()
             loss = -delta.clip(upper=0).rolling(14).mean()
@@ -54,20 +54,15 @@ class MotorAnalise:
             stop_loss = suporte * 0.97
             stop_gain = resistencia * 1.02
 
-            # --- FUNDAMENTOS & CORREÇÃO DE DY ---
-            # 1. Tenta pegar o Yield pronto
+            # FUNDAMENTOS (COM TRAVA DE SEGURANÇA PARA DY)
             dy = info.get("dividendYield", 0) or 0
-            
-            # 2. Se vier zerado, tenta calcular manualmente: (Dividendos Anuais / Preço)
             if dy == 0:
                 div_rate = info.get("trailingAnnualDividendRate", 0) or info.get("dividendRate", 0)
                 if div_rate > 0 and preco_atual > 0:
                     dy = div_rate / preco_atual
             
-            # 3. Trava de Escala (Ex: Se vier 12.0 em vez de 0.12)
-            if dy > 2.0: 
-                dy = dy / 100
-                
+            if dy > 2.0: dy = dy / 100
+            
             lpa = info.get("trailingEps", 0) or 0
             vpa = info.get("bookValue", 0) or 0
             
@@ -75,7 +70,7 @@ class MotorAnalise:
             dpa = preco_atual * dy
             p_bazin = dpa / 0.06 if dpa > 0 else 0
             p_graham = np.sqrt(22.5 * lpa * vpa) if (lpa > 0 and vpa > 0) else 0
-            p_gordon = p_bazin # Proxy
+            p_gordon = p_bazin
 
             # SCORE IA
             score = 50
@@ -83,7 +78,7 @@ class MotorAnalise:
 
             if p_bazin > 0 and preco_atual < p_bazin: score += 20; motivos.append("Desconto Bazin")
             if p_graham > 0 and preco_atual < p_graham: score += 20; motivos.append("Desconto Graham")
-            if dy > 0.06: score += 10; motivos.append(f"Dividendos Atrativos ({dy*100:.1f}%)")
+            if dy > 0.06: score += 10; motivos.append(f"DY Atrativo ({dy*100:.1f}%)")
 
             if rsi < 30: score += 20; motivos.append("RSI Sobrevendido")
             elif rsi > 70: score -= 20; motivos.append("RSI Sobrecomprado")
@@ -103,7 +98,7 @@ class MotorAnalise:
                 "p_bazin": p_bazin,
                 "p_graham": p_graham,
                 "p_gordon": p_gordon,
-                "dy": dy, # Agora é um decimal confiável (ex: 0.1214)
+                "dy": dy,
                 "suporte": suporte,
                 "resistencia": resistencia,
                 "stop_loss": stop_loss,
@@ -151,7 +146,7 @@ def disparar_alerta(titulo, corpo):
     except: pass
 
 @st.cache_data(ttl=3600)
-def obter_dados_seguros_v8(ticker): # v8 para forçar recálculo de DY
+def obter_dados_seguros_v9(ticker):
     try:
         t_obj = yf.Ticker(ticker)
         hist = t_obj.history(period="2y")
@@ -233,7 +228,7 @@ def scanner_fiis_csv(uploaded_file):
         return pd.DataFrame()
 
 # ======================================================
-# 4. SESSION STATE (SUA CARTEIRA OFICIAL)
+# 4. SESSION STATE
 # ======================================================
 if "carteira_acoes" not in st.session_state:
     dados = [
@@ -258,12 +253,11 @@ if "alertas_enviados" not in st.session_state:
 # 5. INTERFACE
 # ======================================================
 st.sidebar.title("📊 Hedge Fund Ricardo")
-
 ticker_raw = st.sidebar.text_input("🔍 Analisar Ticker:", "BBAS3").upper()
 ticker_input = formatar_ticker(ticker_raw)
 
 if st.sidebar.button("🔄 Restaurar Carteira Padrão"):
-    dados = [
+    st.session_state.carteira_acoes = pd.DataFrame([
         ["ALZR11.SA", 100, 10.81], ["BBAS3.SA", 1703, 24.48], ["BBSE3.SA", 55, 35.64],
         ["BTCI11.SA", 502, 10.16], ["BTLG11.SA", 60, 98.50], ["CCME11.SA", 152, 8.55],
         ["CMIG4.SA", 1644, 11.12], ["CPLE3.SA", 617, 9.64], ["CPSH11.SA", 169, 10.10],
@@ -275,8 +269,7 @@ if st.sidebar.button("🔄 Restaurar Carteira Padrão"):
         ["TAEE4.SA", 1000, 11.36], ["VALE3.SA", 152, 54.79], ["VGIR11.SA", 296, 9.58],
         ["VISC11.SA", 16, 109.70], ["XPCA11.SA", 110, 8.77], ["XPLG11.SA", 26, 102.31],
         ["XPML11.SA", 10, 106.05]
-    ]
-    st.session_state.carteira_acoes = pd.DataFrame(dados, columns=["Ticker", "Qtd", "PM"])
+    ], columns=["Ticker", "Qtd", "PM"])
     st.rerun()
 
 tabs = st.tabs(["🔎 Análise Técnica", "💼 Carteira Geral", "🏢 Scanner FIIs 360", "💰 Futuro"])
@@ -284,7 +277,7 @@ tabs = st.tabs(["🔎 Análise Técnica", "💼 Carteira Geral", "🏢 Scanner F
 # --- ABA 1: ANÁLISE ---
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
-    r = obter_dados_seguros_v8(ticker_input)
+    r = obter_dados_seguros_v9(ticker_input)
     
     if r:
         col_ia1, col_ia2 = st.columns([1, 3])
@@ -314,7 +307,6 @@ with tabs[0]:
         
         with c_fund:
             st.subheader("📊 Fundamentos")
-            # Exibe DY formatado (x100)
             fund_data = {"Indicador": ["DY", "P/L", "P/VP", "ROE"], "Valor": [f"{r['dy']*100:.2f}%", f"{r['pl']:.2f}", f"{r['pvp']:.2f}", f"{r['roe']*100:.1f}%"]}
             st.dataframe(pd.DataFrame(fund_data), use_container_width=True)
 
@@ -325,7 +317,7 @@ with tabs[0]:
                 close = hist_chart["Close"]
                 if isinstance(close, pd.DataFrame): close = close.iloc[:,0]
                 
-                # MM50
+                # Média Móvel
                 mm50 = close.rolling(window=50).mean()
 
                 fig = go.Figure()
@@ -343,7 +335,7 @@ with tabs[0]:
                 st.plotly_chart(fig, use_container_width=True)
         except Exception as e: st.error(f"Erro gráfico: {e}")
 
-    else: st.warning(f"Ticker '{ticker_input}' não encontrado.")
+    else: st.warning("Ticker não encontrado.")
 
 # --- ABA 2: CARTEIRA ---
 with tabs[1]:
@@ -356,7 +348,7 @@ with tabs[1]:
         bar = st.progress(0)
         total = len(df_ed)
         for i, row in df_ed.iterrows():
-            r = obter_dados_seguros_v8(row["Ticker"])
+            r = obter_dados_seguros_v9(row["Ticker"])
             if r:
                 rec = r['decisao_ia']
                 if r['preco'] < row['PM'] * 0.95 and "COMPRA" in rec: rec = "🔥 COMPRA FORTE (Abaixo PM)"
@@ -375,4 +367,41 @@ with tabs[1]:
         
         if res:
             df_res = pd.DataFrame(res).sort_values("Score", ascending=False)
-            st.dataframe(df_res.style.background_gradient(
+            # CORREÇÃO DA LINHA 378 (QUEBRA DE LINHA)
+            st.dataframe(
+                df_res.style.background_gradient(subset=["Score"], cmap="Greens")
+                .map(lambda x: "color: red" if x < 0 else "color: green", subset=["Lucro"]),
+                use_container_width=True
+            )
+
+# --- ABA 3: FIIs 360 ---
+with tabs[2]:
+    st.subheader("🏢 Scanner FIIs 360º")
+    st.info("Faça upload do CSV do StatusInvest. O sistema usará sua lógica de Papel vs Tijolo.")
+    
+    uploaded = st.file_uploader("Arraste o arquivo aqui", type=["csv"])
+    if uploaded:
+        df_fii = scanner_fiis_csv(uploaded)
+        if not df_fii.empty:
+            st.success(f"{len(df_fii)} FIIs processados!")
+            st.dataframe(df_fii.head(30).style.background_gradient(subset=["Score"], cmap="RdYlGn"), use_container_width=True)
+        else:
+            st.warning("Erro ao ler CSV.")
+
+# --- ABA 4: FUTURO ---
+with tabs[3]:
+    st.subheader("🔮 Simulação Patrimonial")
+    if not df_ed.empty:
+        patrimonio_atual = 0
+        for _, row in df_ed.iterrows():
+            patrimonio_atual += row['Qtd'] * row['PM']
+        
+        st.metric("Patrimônio Base (Custo)", f"R$ {patrimonio_atual:,.2f}")
+        aporte = st.number_input("Aporte Mensal", 2000.0)
+        
+        if st.button("Simular 10 Anos"):
+            motor = MotorAnalise()
+            sims = motor.monte_carlo(patrimonio_atual, aporte, 10, 1000)
+            fig = go.Figure(go.Histogram(x=sims, nbinsx=40, marker_color='green'))
+            st.plotly_chart(fig, use_container_width=True)
+            st.metric("Mediana Esperada", f"R$ {np.median(sims):,.2f}")
