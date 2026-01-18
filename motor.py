@@ -17,12 +17,12 @@ class MotorAnalise:
             if isinstance(fechamento, pd.DataFrame): fechamento = fechamento.iloc[:, 0]
             if isinstance(volume, pd.DataFrame): volume = volume.iloc[:, 0]
             
-            # Garante que temos dados suficientes
             if len(fechamento) < 30: return None
             
             preco_atual = float(fechamento.iloc[-1])
             
-            # --- 2. TÉCNICA (MACD + MÉDIAS) ---
+            # --- 2. TÉCNICA (MACD, MÉDIAS E VOLATILIDADE) ---
+            # Médias
             mme9 = fechamento.ewm(span=9, adjust=False).mean()
             mme21 = fechamento.ewm(span=21, adjust=False).mean()
             curta, longa = mme9.iloc[-1], mme21.iloc[-1]
@@ -40,6 +40,10 @@ class MotorAnalise:
             vol_media = volume.rolling(20).mean().iloc[-1]
             vol_relativo = (volume.iloc[-1] / vol_media) if vol_media > 0 else 0
 
+            # Volatilidade (Restaurada)
+            retornos = fechamento.pct_change().dropna()
+            volatilidade = retornos.std() * (252 ** 0.5)
+
             # Sinal Técnico
             sinal_tecnico = "NEUTRO"
             preco_alvo = 0.0
@@ -55,8 +59,7 @@ class MotorAnalise:
             elif curta < longa:
                 sinal_tecnico = "📉 TENDÊNCIA BAIXA"
 
-            # --- 3. FUNDAMENTOS (EXTRAÇÃO SEGURA) ---
-            # Função auxiliar para evitar erro de NoneType
+            # --- 3. FUNDAMENTOS (BLINDADOS) ---
             def safe_get(key, default=0.0):
                 val = info.get(key)
                 if val is None: return default
@@ -72,8 +75,7 @@ class MotorAnalise:
             margem_liq = safe_get("profitMargins")
             divida_ebitda = safe_get("debtToEbitda")
             
-            # NOVOS INDICADORES (BLINDADOS PARA BANCOS)
-            # Se vier None, assume 0 para não quebrar, mas não penaliza se for 0 em lógica específica
+            # Novos Indicadores
             liq_corrente = safe_get("currentRatio", 0) 
             cresc_receita = safe_get("revenueGrowth", 0)
 
@@ -81,38 +83,33 @@ class MotorAnalise:
             val_div = div_rate
             p_bazin = val_div / 0.06 if val_div > 0 else 0
             p_graham = np.sqrt(22.5 * lpa * vpa) if (lpa > 0 and vpa > 0) else 0
-            p_gordon = p_bazin
+            p_gordon = p_bazin # Gordon simplificado (igual a Bazin para crescimento zero)
 
             # --- 4. SCORE IA ---
             score = 50
             motivos = []
             alertas = []
 
-            # Técnica
+            # Critérios
             if "COMPRA" in sinal_tecnico: 
                 score += 15; motivos.append("Cruzamento Médias")
                 if macd_val > signal_val: score += 5; motivos.append("MACD Compra")
                 if vol_relativo > 1.2: score += 5; motivos.append("Volume Forte")
             elif "VENDA" in sinal_tecnico: score -= 15; alertas.append("Tendência Baixa")
 
-            # Valuation
             if p_bazin > 0 and preco_atual < p_bazin: score += 10; motivos.append("Desconto Bazin")
             if p_graham > 0 and preco_atual < p_graham: score += 10; motivos.append("Desconto Graham")
-
-            # Qualidade
             if roe > 0.15: score += 10; motivos.append(f"ROE Alto ({roe*100:.0f}%)")
             
             if cresc_receita > 0.10: score += 10; motivos.append("Crescimento > 10%")
             elif cresc_receita < -0.05: score -= 10; alertas.append("Receita Caindo")
 
-            # Solvência (Lógica Adaptativa)
-            # Se for banco (geralmente sem liquidez corrente informada), ignoramos esse teste
+            # Solvência (Ignora se for zero/banco)
             if liq_corrente > 0: 
                 if liq_corrente > 1.5: score += 5; motivos.append("Caixa Sólido")
                 elif liq_corrente < 1.0: score -= 15; alertas.append("Liquidez Baixa")
 
             if divida_ebitda > 3.5: score -= 15; alertas.append("Alavancado")
-
             if dy > 0.06: score += 5; motivos.append("Dividendos")
 
             # RSI
@@ -132,7 +129,6 @@ class MotorAnalise:
             elif score <= 40: decisao = "🔴 VENDA/RISCO"
             else: decisao = "⚪ MANTER"
 
-            # Resumo
             txt_resumo = ", ".join(motivos[:3])
             if alertas: txt_resumo += f" | ⚠️ {', '.join(alertas[:2])}"
 
@@ -141,8 +137,9 @@ class MotorAnalise:
             resistencia = float(fechamento.tail(window).max())
 
             return {
-                "preco": preco_atual, "rsi": rsi, "volatilidade": 0, 
-                "p_bazin": p_bazin, "p_graham": p_graham, "dy": dy,
+                "preco": preco_atual, "rsi": rsi, "volatilidade": volatilidade, 
+                "p_bazin": p_bazin, "p_graham": p_graham, "p_gordon": p_gordon, # <--- AQUI ESTAVA O ERRO (Corrigido)
+                "dy": dy,
                 "suporte": suporte, "resistencia": resistencia, 
                 "stop_loss": suporte * 0.97, "stop_gain": resistencia * 1.02,
                 "score_ia": score, "decisao_ia": decisao, "motivos": txt_resumo,
@@ -154,13 +151,11 @@ class MotorAnalise:
                 "liq_corrente": liq_corrente, "cresc_receita": cresc_receita
             }
         except Exception as e:
-            # Imprime o erro no terminal para sabermos o que houve
             print(f"❌ Erro MotorAnalise ({ticker}): {e}")
             return None
 
-    # MANTENHA AS FUNÇÕES ABAIXO IGUAIS AO ARQUIVO ANTERIOR
+    # MANTENHA AS FUNÇÕES ABAIXO (Monte Carlo e Dividendos) IGUAIS
     def monte_carlo_carteira(self, retornos_carteira, valor_inicial, aporte_mensal, anos=10, sims=1000):
-        # ... (copie a função igual da versão anterior) ...
         if len(retornos_carteira) == 0: return np.array([])
         log_returns = np.log(1 + retornos_carteira)
         mu, sigma = log_returns.mean(), log_returns.std()
@@ -177,7 +172,6 @@ class MotorAnalise:
         return np.array(res)
 
     def consultar_dividendos(self, ticker):
-        # ... (copie a função igual da versão anterior) ...
         try:
             t = yf.Ticker(ticker)
             hoje = pd.Timestamp.now().normalize()
