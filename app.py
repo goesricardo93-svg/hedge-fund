@@ -6,7 +6,7 @@ import numpy as np
 import datetime
 
 # ======================================================
-# 1. IMPORTAÇÃO DOS MÓDULOS (Arquitetura Profissional)
+# 1. IMPORTAÇÃO DOS MÓDULOS
 # ======================================================
 try:
     from motor import MotorAnalise
@@ -19,15 +19,13 @@ except ImportError as e:
     st.error(f"Erro Crítico de Arquitetura: Faltam arquivos modulares. Detalhes: {e}")
     st.stop()
 
-# Configuração da Página
-st.set_page_config(page_title="Hedge Fund Ricardo | Terminal v40.0", layout="wide")
+st.set_page_config(page_title="Hedge Fund Ricardo | vFinal 41.0", layout="wide")
 
 # ======================================================
 # 2. CACHE E FUNÇÕES UTILITÁRIAS
 # ======================================================
 @st.cache_data(ttl=3600)
-def obter_dados_v40(ticker): 
-    """Cache de 1h para dados fundamentais e técnicos"""
+def obter_dados_v41(ticker): 
     try:
         t = yf.Ticker(ticker)
         hist = t.history(period="2y")
@@ -37,9 +35,7 @@ def obter_dados_v40(ticker):
 
 @st.cache_data(ttl=86400)
 def download_historico_longo(tickers):
-    """Cache de 24h para histórico de 5 anos (Evita bloqueio do Yahoo)"""
     data = yf.download(tickers, period="5y", progress=False)
-    # Tratamento robusto para diferentes formatos de retorno do yfinance
     if isinstance(data, pd.DataFrame):
         if "Adj Close" in data: return data["Adj Close"]
         elif "Close" in data: return data["Close"]
@@ -52,7 +48,7 @@ def formatar_ticker(ticker):
     return t
 
 # ======================================================
-# 3. ESTADO DA SESSÃO (BANCO DE DADOS TEMPORÁRIO)
+# 3. ESTADO DA SESSÃO
 # ======================================================
 if "carteira_acoes" not in st.session_state:
     dados = [
@@ -81,19 +77,18 @@ if "alertas_enviados" not in st.session_state:
     st.session_state.alertas_enviados = set()
 
 # ======================================================
-# 4. ROBÔ DE AUTOMAÇÃO (DIA 01)
+# 4. ROBÔ DE AUTOMAÇÃO
 # ======================================================
 hoje = datetime.date.today()
 mes_str = hoje.strftime("%Y-%m")
-# Parâmetro de URL para forçar execução via Cron Job: ?run_report=true
 forcar_envio = st.query_params.get("run_report") == "true"
 
 if (hoje.day == 1 or forcar_envio) and f"report_{mes_str}" not in st.session_state:
-    with st.spinner("🤖 Processando Fechamento Mensal Automático..."):
+    with st.spinner("🤖 Processando Fechamento Mensal..."):
         try:
             res_auto = []
             for _, row in st.session_state.carteira_acoes.iterrows():
-                r = obter_dados_v40(row["Ticker"])
+                r = obter_dados_v41(row["Ticker"])
                 if r:
                     res_auto.append({
                         "Ticker": row["Ticker"],
@@ -103,22 +98,16 @@ if (hoje.day == 1 or forcar_envio) and f"report_{mes_str}" not in st.session_sta
                         "Lucro": (r["preco"] - row["PM"]) * row["Qtd"],
                         "Score": r['score_ia']
                     })
-            
             if res_auto:
                 df_auto = pd.DataFrame(res_auto)
-                patr_auto = df_auto["Valor_Atual"].sum()
-                
-                # Gera PDF e Envia
-                pdf_bytes = RelatorioPrivate(df_auto, patr_auto).gerar_pdf()
-                enviar_relatorio_anexo(pdf_bytes, f"Relatorio_Mensal_{mes_str}.pdf")
-                
+                pdf_bytes = RelatorioPrivate(df_auto, df_auto["Valor_Atual"].sum()).gerar_pdf()
+                enviar_relatorio_anexo(pdf_bytes, f"Relatorio_{mes_str}.pdf")
                 st.session_state[f"report_{mes_str}"] = True
-                st.toast("✅ Relatório Mensal enviado com sucesso!", icon="🚀")
-        except Exception as e:
-            st.error(f"Erro na automação: {e}")
+                st.toast("✅ Relatório enviado!", icon="🚀")
+        except: pass
 
 # ======================================================
-# 5. INTERFACE DO USUÁRIO
+# 5. INTERFACE
 # ======================================================
 st.sidebar.title("📊 Hedge Fund Ricardo")
 ticker_raw = st.sidebar.text_input("🔍 Analisar Ticker:", "BBAS3").upper()
@@ -130,41 +119,36 @@ if st.sidebar.button("🔄 Restaurar Padrões"):
 
 tabs = st.tabs(["🔎 Análise", "💼 Carteira", "🏢 FIIs 360", "🛡️ RF & PGBL", "💰 Futuro", "🦁 Fiscal"])
 
-# --- ABA 1: ANÁLISE ---
+# --- ABA 1: ANÁLISE (CORRIGIDA - GRÁFICO) ---
 with tabs[0]:
     st.header(f"Raio-X: {ticker_input}")
     motor = MotorAnalise()
-    r = obter_dados_v40(ticker_input)
+    r = obter_dados_v41(ticker_input)
     
     if r:
-        # Plugin de Dividendos (Visual destacado)
         div_info = motor.consultar_dividendos(ticker_input)
         if div_info['status'] != "SEM DADOS":
             cor = "green" if div_info['status'] == "CONFIRMADO" else "blue"
             st.markdown(f"""
             <div style="padding:10px; border-radius:5px; background-color:rgba(0,100,0,0.1); border:1px solid {cor}; margin-bottom:10px;">
                 💰 <b>PROVENTOS ({div_info['status']}):</b> Data: <b>{div_info['data']}</b> | Valor: <b>{div_info['valor']}</b>
-            </div>
-            """, unsafe_allow_html=True)
+            </div>""", unsafe_allow_html=True)
 
-        # Score e Decisão
-        c_ia1, c_ia2 = st.columns([1, 3])
-        c_ia1.metric("Score IA", f"{r['score_ia']}/100")
-        if "COMPRA" in r['decisao_ia']: c_ia2.success(f"### {r['decisao_ia']}")
-        elif "VENDA" in r['decisao_ia']: c_ia2.error(f"### {r['decisao_ia']}")
-        else: c_ia2.warning(f"### {r['decisao_ia']}")
+        col_ia1, col_ia2 = st.columns([1, 3])
+        col_ia1.metric("Score IA", f"{r['score_ia']}/100")
+        if "COMPRA" in r['decisao_ia']: col_ia2.success(f"### {r['decisao_ia']}")
+        elif "VENDA" in r['decisao_ia']: col_ia2.error(f"### {r['decisao_ia']}")
+        else: col_ia2.warning(f"### {r['decisao_ia']}")
         
         st.write(f"**Análise Cruzada:** {r['motivos']}")
         st.divider()
 
-        # Métricas
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("Preço Atual", f"R$ {r['preco']:.2f}")
         k2.metric("Teto (Alvo IA)", f"R$ {r['stop_gain']:.2f}")
         k3.metric("RSI (14)", f"{r['rsi']:.0f}")
         k4.metric("Volatilidade", f"{r['volatilidade']*100:.1f}%")
 
-        # Tabelas Fundamentalistas
         col_val, col_fund = st.columns(2)
         with col_val:
             st.subheader("📋 Valuation")
@@ -172,32 +156,44 @@ with tabs[0]:
                 "Modelo": ["Bazin (Div)", "Graham (Patr)", "Gordon (Cresc)"],
                 "Preço Justo": [f"R$ {r['p_bazin']:.2f}", f"R$ {r['p_graham']:.2f}", f"R$ {r['p_gordon']:.2f}"]
             }), use_container_width=True)
-        
         with col_fund:
-            st.subheader("📊 Qualidade & Saúde")
+            st.subheader("📊 Qualidade")
             st.dataframe(pd.DataFrame({
                 "Indicador": ["DY", "P/L", "P/VP", "ROE", "Dívida/EBITDA"],
                 "Valor": [f"{r['dy']*100:.2f}%", f"{r['pl']:.2f}", f"{r['pvp']:.2f}", f"{r['roe']*100:.1f}%", f"{r['divida_ebitda']:.2f}x"]
             }), use_container_width=True)
 
-        # Gráfico
+        # --- CORREÇÃO DO GRÁFICO ---
         st.subheader("📈 Gráfico Técnico")
         try:
             hist = yf.download(ticker_input, period="2y", progress=False)
             if not hist.empty:
-                # Tratamento robusto para gráfico
-                close = hist["Close"] if "Close" in hist else hist.iloc[:,0]
-                if isinstance(close, pd.DataFrame): close = close.iloc[:,0]
-                mm50, mm200 = close.rolling(50).mean(), close.rolling(200).mean()
+                # Função para garantir que os dados sejam Series (1D) e não DataFrame (2D)
+                def fix_data(col_name):
+                    if col_name in hist.columns:
+                        d = hist[col_name]
+                        if isinstance(d, pd.DataFrame): return d.iloc[:, 0]
+                        return d
+                    return hist.iloc[:, 0] # Fallback
+
+                open_p = fix_data("Open")
+                high_p = fix_data("High")
+                low_p = fix_data("Low")
+                close_p = fix_data("Close")
+                
+                mm50 = close_p.rolling(50).mean()
                 
                 fig = go.Figure()
-                fig.add_trace(go.Candlestick(x=hist.index, open=hist["Open"] if "Open" in hist else hist.iloc[:,0], close=close, high=hist["High"] if "High" in hist else hist.iloc[:,0], low=hist["Low"] if "Low" in hist else hist.iloc[:,0], name="Preço"))
+                fig.add_trace(go.Candlestick(
+                    x=hist.index,
+                    open=open_p, high=high_p, low=low_p, close=close_p,
+                    name="Preço"
+                ))
                 fig.add_trace(go.Scatter(x=hist.index, y=mm50, name="MM50", line=dict(color='blue')))
-                fig.add_trace(go.Scatter(x=hist.index, y=mm200, name="MM200", line=dict(color='orange')))
                 fig.add_hline(y=r['suporte'], line_dash="dot", line_color="green", annotation_text="SUPORTE")
                 fig.add_hline(y=r['resistencia'], line_dash="dot", line_color="red", annotation_text="RESISTÊNCIA")
                 st.plotly_chart(fig, use_container_width=True)
-        except: st.error("Erro ao carregar gráfico.")
+        except Exception as e: st.error(f"Erro ao carregar gráfico: {e}")
     else: st.warning("Ativo não encontrado.")
 
 # --- ABA 2: CARTEIRA ---
@@ -214,16 +210,13 @@ with tabs[1]:
         bar = st.progress(0)
         total = len(df_ed)
         for i, row in df_ed.iterrows():
-            r = obter_dados_v40(row["Ticker"])
+            r = obter_dados_v41(row["Ticker"])
             if r:
                 rec = r['decisao_ia']
                 if r['preco'] < row['PM'] * 0.95 and r['score_ia'] > 60: rec = "🔥 COMPRA (Abaixo PM)"
-                
-                # Alertas
                 if r['score_ia'] >= 80 and row["Ticker"] not in st.session_state.alertas_enviados:
                     disparar_alerta(f"OPORTUNIDADE: {row['Ticker']}", f"Score: {r['score_ia']}")
                     st.session_state.alertas_enviados.add(row["Ticker"])
-                
                 res.append({
                     "Ticker": row["Ticker"], "Preço": r["preco"], "PM": row["PM"],
                     "Valor_Atual": row["Qtd"] * r["preco"], "Lucro": (r["preco"] - row["PM"]) * row["Qtd"],
@@ -235,12 +228,11 @@ with tabs[1]:
             df_res = pd.DataFrame(res)
             st.session_state.df_analisado = df_res 
             df_final = rebalancear_e_aportar(df_res, aporte_user)
-            st.session_state.df_final = df_final # Salva para o PDF
+            st.session_state.df_final = df_final
             
             st.success("✅ Rebalanceamento Calculado!")
             st.dataframe(df_final[["Ticker", "Score", "Valor_Atual", "Lucro", "Veredito IA", "Aporte Sugerido (R$)"]].style.format({"Valor_Atual": "R$ {:.2f}", "Lucro": "R$ {:.2f}", "Aporte Sugerido (R$)": "R$ {:.2f}"}).background_gradient(subset=["Aporte Sugerido (R$)"], cmap="Greens"), use_container_width=True)
 
-    # Botão PDF
     if "df_final" in st.session_state and not st.session_state.df_final.empty:
         st.divider()
         if st.button("📄 Gerar Relatório Private (PDF)"):
@@ -278,13 +270,10 @@ with tabs[3]:
 # --- ABA 5: FUTURO ---
 with tabs[4]:
     st.subheader("🔮 Simulação Patrimonial (Monte Carlo Real)")
-    
-    # Define valores iniciais
     real_acoes = st.session_state.df_analisado["Valor_Atual"].sum() if "df_analisado" in st.session_state else 0
     real_rf = st.session_state.carteira_rf["Saldo Atual"].sum()
-    if real_acoes == 0 and not df_ed.empty: real_acoes = (df_ed['Qtd'] * df_ed['PM']).sum() # Fallback
+    if real_acoes == 0 and not df_ed.empty: real_acoes = (df_ed['Qtd'] * df_ed['PM']).sum()
     
-    # Inputs Flexíveis
     ci1, ci2 = st.columns(2)
     sim_ini = ci1.number_input("💰 Patrimônio Inicial", value=float(real_acoes + real_rf), step=1000.0)
     sim_apt = ci2.number_input("➕ Aporte Mensal", value=2000.0, step=100.0)
@@ -295,26 +284,20 @@ with tabs[4]:
             retornos = hist.pct_change().dropna().mean(axis=1)
             motor = MotorAnalise()
             
-            # Proporção Risco vs RF
             prop = real_acoes / (real_acoes + real_rf) if (real_acoes + real_rf) > 0 else 1.0
-            
-            # Simula Risco (GBM) e RF (Fixa)
             sim_risco = motor.monte_carlo_carteira(retornos, sim_ini * prop, sim_apt * prop, 10, 1000)
             
-            # Projeta RF
             meses = 120
             taxa_rf = 0.008
             rf_base = (sim_ini * (1-prop)) * ((1 + taxa_rf) ** meses)
             rf_apts = (sim_apt * (1-prop)) * (((1 + taxa_rf) ** meses - 1) / taxa_rf)
             
             total = sim_risco + rf_base + rf_apts
-            
             st.plotly_chart(go.Figure(go.Histogram(x=total, nbinsx=50, marker_color='green')), use_container_width=True)
             k1, k2, k3 = st.columns(3)
             k1.metric("Pessimista (10%)", f"R$ {np.percentile(total, 10):,.2f}")
             k2.metric("Provável (Mediana)", f"R$ {np.median(total):,.2f}")
             k3.metric("Otimista (90%)", f"R$ {np.percentile(total, 90):,.2f}")
-            
         except Exception as e: st.error(f"Erro na simulação: {e}")
 
 # --- ABA 6: FISCAL ---
