@@ -1,179 +1,206 @@
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import timedelta
+from datetime import datetime
 
 class MotorAnalise:
-    def identificar_setor(self, info, ticker):
-        # LISTA VIP
-        TIJOLO_VIP = ['XPML11.SA', 'VISC11.SA', 'MALL11.SA', 'HGBS11.SA', 'CPSH11.SA', 'HGLG11.SA', 'BTLG11.SA', 'XPLG11.SA', 'VILG11.SA', 'LVBI11.SA', 'HGRU11.SA', 'KNRI11.SA', 'HGRE11.SA', 'JSRE11.SA', 'BRCO11.SA', 'TRXF11.SA', 'ALZR11.SA', 'GGRC11.SA']
-        PAPEL_VIP = ['MXRF11.SA', 'KNCR11.SA', 'CPTS11.SA', 'RECR11.SA', 'IRDM11.SA', 'KNIP11.SA', 'HGCR11.SA', 'VGIR11.SA', 'CVBI11.SA', 'KNSC11.SA']
-        
-        if ticker in TIJOLO_VIP: return "FIIs-Tijolo"
-        if ticker in PAPEL_VIP: return "FIIs-Papel"
-
-        # Fallback por texto
-        industry = (info.get('industry', '') or '').lower()
-        if ticker.endswith('11.SA'): return "FIIs-Indefinido"
-        if 'bank' in industry: return "Ações-Bancos"
-        if 'electric' in industry: return "Ações-Elétricas"
-        return "Ações-Outros"
-
     def analisar(self, hist, info, ticker):
         try:
             if hist is None or hist.empty: return None
-            
-            # Dados Brutos
-            fechamento = hist["Close"]
-            volume = hist["Volume"]
-            if len(fechamento) < 30: return None
-            preco_atual = float(fechamento.iloc[-1])
 
-            # --- 1. ANÁLISE TÉCNICA (RESTAURADA) ---
+            # --- 1. TRATAMENTO DE DADOS ---
+            if isinstance(hist, pd.DataFrame):
+                fechamento = hist["Close"] if "Close" in hist.columns else hist.iloc[:, 0]
+                volume = hist["Volume"] if "Volume" in hist.columns else pd.Series([0]*len(fechamento))
+            else: return None
+
+            if isinstance(fechamento, pd.DataFrame): fechamento = fechamento.iloc[:, 0]
+            if isinstance(volume, pd.DataFrame): volume = volume.iloc[:, 0]
+            
+            # Garante dados mínimos
+            if len(fechamento) < 30: return None
+            
+            preco_atual = float(fechamento.iloc[-1])
+            
+            # --- 2. TÉCNICA (MACD, MÉDIAS E VOLATILIDADE) ---
             # Médias
             mme9 = fechamento.ewm(span=9, adjust=False).mean()
             mme21 = fechamento.ewm(span=21, adjust=False).mean()
-            
+            curta, longa = mme9.iloc[-1], mme21.iloc[-1]
+            curta_ant, longa_ant = mme9.iloc[-2], mme21.iloc[-2]
+
             # MACD
             ema12 = fechamento.ewm(span=12, adjust=False).mean()
             ema26 = fechamento.ewm(span=26, adjust=False).mean()
             macd_line = ema12 - ema26
             signal_line = macd_line.ewm(span=9, adjust=False).mean()
-            
-            # RSI (Índice de Força Relativa)
-            delta = fechamento.diff()
-            gain = delta.clip(lower=0).rolling(14).mean()
-            loss = -delta.clip(upper=0).rolling(14).mean()
-            rs = gain / loss
-            rsi_series = 100 - (100 / (1 + rs))
-            rsi = rsi_series.iloc[-1]
-            if np.isnan(rsi): rsi = 50
+            macd_val = macd_line.iloc[-1]
+            signal_val = signal_line.iloc[-1]
 
-            # Volatilidade e Níveis
+            # Volume
+            vol_media = volume.rolling(20).mean().iloc[-1]
+            vol_relativo = (volume.iloc[-1] / vol_media) if vol_media > 0 else 0
+
+            # Volatilidade (Cálculo Restaurado)
             retornos = fechamento.pct_change().dropna()
-            volatilidade = retornos.std() * (252 ** 0.5) if not retornos.empty else 0.0
+            if len(retornos) > 0:
+                volatilidade = retornos.std() * (252 ** 0.5)
+            else:
+                volatilidade = 0.0
+
+            # Sinal Técnico
+            sinal_tecnico = "NEUTRO"
+            preco_alvo = 0.0
             
-            suporte = float(fechamento.tail(60).min())
-            resistencia = float(fechamento.tail(60).max())
-            stop_loss = suporte * 0.97
-            stop_gain = resistencia * 1.02
+            if curta > longa and curta_ant <= longa_ant:
+                sinal_tecnico = "⚡ COMPRA (CRUZAMENTO)"
+                preco_alvo = preco_atual
+            elif curta > longa:
+                sinal_tecnico = "📈 TENDÊNCIA ALTA"
+                preco_alvo = curta 
+            elif curta < longa and curta_ant >= longa_ant:
+                sinal_tecnico = "☠️ VENDA (CRUZAMENTO)"
+            elif curta < longa:
+                sinal_tecnico = "📉 TENDÊNCIA BAIXA"
 
-            # --- 2. DIVIDENDOS (LÓGICA V50.1 + TRAVA) ---
-            dy_anual = 0.0
-            try:
-                # Método Manual: Soma os últimos 12 meses do histórico
-                t_obj = yf.Ticker(ticker)
-                divs = t_obj.dividends
-                if not divs.empty:
-                    data_corte = pd.Timestamp.now(tz=divs.index.tz) - timedelta(days=365)
-                    soma_12m = divs[divs.index >= data_corte].sum()
-                    if preco_atual > 0:
-                        dy_anual = (soma_12m / preco_atual) * 100
-            except: pass
+            # --- 3. FUNDAMENTOS (BLINDADOS) ---
+            def safe_get(key, default=0.0):
+                val = info.get(key)
+                if val is None: return default
+                return float(val)
 
-            # Fallback se o manual der zero
-            if dy_anual == 0:
-                val = info.get("dividendYield", 0)
-                if val is not None: dy_anual = val * 100
+            div_rate = safe_get("trailingAnnualDividendRate")
+            if div_rate == 0: div_rate = safe_get("dividendYield") * preco_atual
+            dy = div_rate / preco_atual if preco_atual > 0 else 0
+
+            lpa = safe_get("trailingEps")
+            vpa = safe_get("bookValue")
+            roe = safe_get("returnOnEquity")
+            margem_liq = safe_get("profitMargins")
+            divida_ebitda = safe_get("debtToEbitda")
             
-            # Trava anti-erro (Ex: 1214%)
-            if dy_anual > 200.0: dy_anual = dy_anual / 100.0
-
-            # --- 3. FUNDAMENTOS E P/VP ---
-            def safe_float(v): 
-                try: return float(v) 
-                except: return 0.0
-
-            pvp = safe_float(info.get("priceToBook"))
-            if pvp == 0 or pvp is None:
-                vpa = safe_float(info.get("bookValue"))
-                # Fallback Balanço
-                if vpa == 0:
-                    a = safe_float(info.get("totalAssets"))
-                    s = safe_float(info.get("sharesOutstanding"))
-                    if a>0 and s>0: vpa = a/s
-                
-                if vpa > 0: pvp = preco_atual / vpa
-                elif "11.SA" in ticker: pvp = 1.0 # Assume neutro para FII se tudo falhar
-
-            lpa = safe_float(info.get("trailingEps"))
-            vpa = safe_float(info.get("bookValue"))
+            # Novos Indicadores (Blindados para Bancos)
+            liq_corrente = safe_get("currentRatio", 0) 
+            cresc_receita = safe_get("revenueGrowth", 0)
 
             # Valuation
-            div_reais = (dy_anual / 100) * preco_atual
-            p_bazin = div_reais / 0.06 if div_reais > 0 else 0
-            p_graham = np.sqrt(22.5 * lpa * vpa) if (lpa>0 and vpa>0) else 0
-            p_gordon = (div_reais * 1.03) / 0.03 if div_reais > 0 else 0
+            val_div = div_rate
+            p_bazin = val_div / 0.06 if val_div > 0 else 0
+            p_graham = np.sqrt(22.5 * lpa * vpa) if (lpa > 0 and vpa > 0) else 0
+            # Gordon Simplificado (Assume Bazin quando não há dados complexos de crescimento g)
+            p_gordon = p_bazin 
 
-            setor = self.identificar_setor(info, ticker)
-            is_fii = "FII" in setor
-            
-            if is_fii: preco_justo = p_bazin
-            else: 
-                validos = [x for x in [p_bazin, p_graham] if x > 0]
-                preco_justo = sum(validos)/len(validos) if validos else 0
-
-            # --- 4. SCORE INTELIGENTE ---
+            # --- 4. SCORE IA ---
             score = 50
             motivos = []
             alertas = []
-            vol_medio = (fechamento * volume).tail(21).mean()
 
-            if is_fii:
-                if vol_medio < 300000: score -= 30; alertas.append("Baixa Liquidez")
-                if 0.85 <= pvp <= 1.10: score += 20; motivos.append("P/VP Justo")
-                elif pvp > 1.15: score -= 15; alertas.append("Caro")
-                if dy_anual > 6.0: score += 15; motivos.append("Bom DY")
-                if volatilidade < 0.20: score += 10; motivos.append("Estável")
-            else:
-                if vol_medio < 1000000: score -= 20; alertas.append("Baixa Liquidez")
-                if mme9.iloc[-1] > mme21.iloc[-1]: score += 20; motivos.append("Tendência Alta")
-                else: score -= 15
-                if macd_line.iloc[-1] > signal_line.iloc[-1]: score += 10; motivos.append("MACD Compra")
-                if preco_justo > preco_atual: score += 15; motivos.append("Upside")
+            # Critérios
+            if "COMPRA" in sinal_tecnico: 
+                score += 15; motivos.append("Cruzamento Médias")
+                if macd_val > signal_val: score += 5; motivos.append("MACD Compra")
+                if vol_relativo > 1.2: score += 5; motivos.append("Volume Forte")
+            elif "VENDA" in sinal_tecnico: score -= 15; alertas.append("Tendência Baixa")
+
+            if p_bazin > 0 and preco_atual < p_bazin: score += 10; motivos.append("Desconto Bazin")
+            if p_graham > 0 and preco_atual < p_graham: score += 10; motivos.append("Desconto Graham")
+            if roe > 0.15: score += 10; motivos.append(f"ROE Alto ({roe*100:.0f}%)")
+            
+            if cresc_receita > 0.10: score += 10; motivos.append("Crescimento > 10%")
+            elif cresc_receita < -0.05: score -= 10; alertas.append("Receita Caindo")
+
+            # Solvência (Ignora se for zero/banco)
+            if liq_corrente > 0: 
+                if liq_corrente > 1.5: score += 5; motivos.append("Caixa Sólido")
+                elif liq_corrente < 1.0: score -= 15; alertas.append("Liquidez Baixa")
+
+            if divida_ebitda > 3.5: score -= 15; alertas.append("Alavancado")
+            if dy > 0.06: score += 5; motivos.append("Dividendos")
+
+            # RSI
+            delta = fechamento.diff()
+            gain = delta.clip(lower=0).rolling(14).mean()
+            loss = -delta.clip(upper=0).rolling(14).mean()
+            if loss.iloc[-1] == 0: rsi = 50
+            else: rsi = 100 - (100 / (1 + (gain.iloc[-1]/loss.iloc[-1])))
+            
+            if rsi < 30: score += 10; motivos.append("RSI Sobrevendido")
+            elif rsi > 70: score -= 10; alertas.append("RSI Esticado")
 
             score = min(100, max(0, score))
+            
+            if score >= 80: decisao = "🟢🟢 COMPRA FORTE"
+            elif score >= 60: decisao = "🟢 COMPRA"
+            elif score <= 40: decisao = "🔴 VENDA/RISCO"
+            else: decisao = "⚪ MANTER"
 
-            # Retorno Completo para o App não quebrar
+            # Resumo
+            txt_resumo = ", ".join(motivos[:3])
+            if alertas: txt_resumo += f" | ⚠️ {', '.join(alertas[:2])}"
+
+            window = 60
+            suporte = float(fechamento.tail(window).min())
+            resistencia = float(fechamento.tail(window).max())
+
+            # --- RETORNO FINAL (AQUI ESTAVA O ERRO - p_gordon ADICIONADO) ---
             return {
-                "preco": preco_atual,
-                "score_ia": score,
-                "decisao_ia": "COMPRA" if score >= 60 else "AGUARDAR",
-                "motivos": ", ".join(motivos),
-                "alertas": ", ".join(alertas),
-                "dy_anual": dy_anual,
-                "p_bazin": p_bazin, "p_graham": p_graham, "p_gordon": p_gordon,
-                "preco_justo": preco_justo,
-                "pvp": pvp,
-                # Dados Técnicos
-                "sinal_tecnico": "ALTA" if mme9.iloc[-1] > mme21.iloc[-1] else "BAIXA",
-                "status_macd": "COMPRA" if macd_line.iloc[-1] > signal_line.iloc[-1] else "VENDA",
-                "rsi": rsi,
-                "volatilidade": volatilidade,
-                "vol_relativo": 1.0,
-                "suporte": suporte,
-                "resistencia": resistencia,
-                "stop_loss": stop_loss,
-                "stop_gain": stop_gain
+                "preco": preco_atual, "rsi": rsi, "volatilidade": volatilidade, 
+                "p_bazin": p_bazin, "p_graham": p_graham, "p_gordon": p_gordon, # <--- CHAVE RESTAURADA
+                "dy": dy,
+                "suporte": suporte, "resistencia": resistencia, 
+                "stop_loss": suporte * 0.97, "stop_gain": resistencia * 1.02,
+                "score_ia": score, "decisao_ia": decisao, "motivos": txt_resumo,
+                "pl": info.get("trailingPE", 0) or 0, "pvp": info.get("priceToBook", 0) or 0,
+                "roe": roe, "margem": margem_liq, "divida_ebitda": divida_ebitda,
+                "sinal_tecnico": sinal_tecnico, "preco_alvo_entrada": preco_alvo,
+                "vol_relativo": vol_relativo, "mme9": curta, "mme21": longa,
+                "macd": macd_val, "macd_signal": signal_val,
+                "liq_corrente": liq_corrente, "cresc_receita": cresc_receita
             }
+        except Exception as e:
+            print(f"❌ Erro MotorAnalise ({ticker}): {e}")
+            return None
 
-        except Exception as e: return None
+    # MANTENHA AS FUNÇÕES ABAIXO IGUAIS (MONTE CARLO E DIVIDENDOS)
+    def monte_carlo_carteira(self, retornos_carteira, valor_inicial, aporte_mensal, anos=10, sims=1000):
+        if len(retornos_carteira) == 0: return np.array([])
+        log_returns = np.log(1 + retornos_carteira)
+        mu, sigma = log_returns.mean(), log_returns.std()
+        days = anos * 252
+        res = []
+        drift = mu - (0.5 * sigma**2)
+        for _ in range(sims):
+            path = np.exp(drift + sigma * np.random.normal(0, 1, days))
+            bal = valor_inicial
+            for i, r in enumerate(path):
+                bal = bal * r
+                if (i+1) % 21 == 0: bal += aporte_mensal
+            res.append(bal)
+        return np.array(res)
 
-    def monte_carlo_carteira(self, retornos, val_ini, aporte, anos=10, sims=1000):
+    def consultar_dividendos(self, ticker):
         try:
-            days = anos * 252
-            r_mean = retornos.mean()
-            r_std = retornos.std()
-            res = []
-            for _ in range(sims):
-                saldo = val_ini
-                # Simulação vetorizada simples
-                daily_returns = np.random.normal(r_mean, r_std, days)
-                for d, r in enumerate(daily_returns):
-                    saldo = saldo * (1 + r)
-                    if (d+1) % 21 == 0: saldo += aporte
-                res.append(saldo)
-            return np.array(res)
-        except: return np.array([])
-    
-    def consultar_dividendos(self, t): return {}
+            t = yf.Ticker(ticker)
+            hoje = pd.Timestamp.now().normalize()
+            resultado = {"ultimo_data": "-", "ultimo_valor": "-", "proximo_data": "-", "proximo_valor": "-", "status": "NEUTRO"}
+            try:
+                divs = t.dividends
+                if not divs.empty:
+                    resultado["ultimo_data"] = divs.index[-1].strftime('%d/%m/%Y')
+                    resultado["ultimo_valor"] = f"R$ {float(divs.iloc[-1]):.2f}"
+            except: pass
+            try:
+                cal = t.calendar
+                data_fut = None
+                if isinstance(cal, dict):
+                    dt = cal.get('Dividend Date') or cal.get('Ex-Dividend Date')
+                    if dt: data_fut = pd.to_datetime(dt)
+                elif isinstance(cal, pd.DataFrame) and not cal.empty:
+                    data_fut = pd.to_datetime(cal.iloc[0, 0])
+                if data_fut and data_fut > hoje:
+                    resultado["proximo_data"] = data_fut.strftime('%d/%m/%Y')
+                    resultado["proximo_valor"] = "Aguardando"
+                    resultado["status"] = "AGENDA"
+            except: pass
+            return resultado
+        except: return {"status": "ERRO", "ultimo_data":"-", "ultimo_valor":"-", "proximo_data":"-", "proximo_valor":"-"}
