@@ -6,15 +6,16 @@ import yfinance as yf
 # ======================================================
 # 1. CONFIGURAÇÃO
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo v96", layout="wide", page_icon="💰")
+st.set_page_config(page_title="Hedge Fund Ricardo v96.1", layout="wide", page_icon="💰")
 
 # ======================================================
-# 2. AUTO-RESET (GARANTE QUE OS 31 ATIVOS APAREÇAM)
+# 2. AUTO-RESET (SEGURANÇA CONTRA CACHE VELHO)
 # ======================================================
-if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v96":
-    st.session_state.versao_sistema = "v96"
+if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v96.1":
+    st.session_state.versao_sistema = "v96.1"
+    st.cache_data.clear()
     if "carteira_acoes" in st.session_state: del st.session_state["carteira_acoes"]
-    st.toast("Layout v49 restaurado com sucesso!", icon="✅")
+    st.toast("Sistema blindado e cache limpo!", icon="🛡️")
 
 # ======================================================
 # 3. IMPORTAÇÃO
@@ -98,7 +99,7 @@ def auto_classificar():
 # ======================================================
 # 6. UI
 # ======================================================
-st.title("💰 Hedge Fund Ricardo v96")
+st.title("💰 Hedge Fund Ricardo v96.1")
 
 with st.sidebar:
     st.header("Backup Seguro")
@@ -112,73 +113,74 @@ with st.sidebar:
         except: st.error("Erro no arquivo")
     
     st.divider()
-    if st.button("🧹 Limpar Memória"): 
+    if st.button("🧹 Limpeza Total"): 
         st.cache_data.clear()
         st.rerun()
 
 tabs = st.tabs(["🔎 Análise Completa", "💼 Carteira", "🏢 Scanner", "🛡️ Renda Fixa", "💰 Futuro", "🦁 Fiscal", "⚡ Opções"])
 
-# ABA 1: ANÁLISE COMPLETA (LAYOUT V49 RESTAURADO)
+# ABA 1: ANÁLISE COMPLETA (BLINDADA COM .get)
 with tabs[0]:
     t = st.text_input("Ticker", "BBSE3.SA").upper()
     if st.button("Analisar"):
         r = obter_dados(t)
         if r:
-            # --- CABEÇALHO GERAL ---
+            # --- CABEÇALHO ---
             c_score, c_veredito = st.columns([1, 3])
-            cor = "normal" if r['score_ia'] >= 60 else "inverse"
-            c_score.metric("Score IA", f"{r['score_ia']}/100")
-            c_veredito.info(f"**Veredito:** {r['decisao_ia']} | **Motivos:** {r['motivos']}")
-            if r['alertas']: c_veredito.error(f"**Atenção:** {r['alertas']}")
+            cor = "normal" if r.get('score_ia', 0) >= 60 else "inverse"
+            c_score.metric("Score IA", f"{r.get('score_ia', 0)}/100")
+            c_veredito.info(f"**Veredito:** {r.get('decisao_ia', '-')} | **Motivos:** {r.get('motivos', '-')}")
+            if r.get('alertas'): c_veredito.error(f"**Atenção:** {r['alertas']}")
             
             st.divider()
 
-            # --- LINHA DE MÉTRICAS (V49: PREÇO, TETO, RSI, VOL) ---
+            # --- LINHA DE MÉTRICAS ---
             k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Preço Atual", f"R$ {r['preco']:.2f}")
-            k2.metric("Teto (Stop Gain)", f"R$ {r['stop_gain']:.2f}")
-            # AQUI ESTÁ O RSI DE VOLTA
-            k3.metric("RSI (14)", f"{r['rsi']:.0f}", delta="Sobrecomprado" if r['rsi']>70 else "Sobrevendido" if r['rsi']<30 else "Neutro", delta_color="inverse")
-            k4.metric("Volatilidade", f"{r['volatilidade']*100:.1f}%")
+            k1.metric("Preço Atual", f"R$ {r.get('preco', 0):.2f}")
+            k2.metric("Teto (Stop Gain)", f"R$ {r.get('stop_gain', 0):.2f}")
+            
+            rsi_val = r.get('rsi', 50)
+            k3.metric("RSI (14)", f"{rsi_val:.0f}", delta="Sobrecomprado" if rsi_val>70 else "Sobrevendido" if rsi_val<30 else "Neutro", delta_color="inverse")
+            k4.metric("Volatilidade", f"{r.get('volatilidade', 0)*100:.1f}%")
 
             st.divider()
 
-            # --- FUNDAMENTOS: VALUATION E SEGURANÇA ---
+            # --- FUNDAMENTOS (USANDO .GET PARA EVITAR CRASH) ---
             col_val, col_fund = st.columns(2)
             
             with col_val:
                 st.subheader("📋 Valuation")
                 st.table(pd.DataFrame({
                     "Modelo": ["Bazin (Dividendos)", "Graham (Patrimonial)", "Gordon (Crescimento)"],
-                    "Preço Justo": [f"R$ {r['p_bazin']:.2f}", f"R$ {r['p_graham']:.2f}", f"R$ {r['p_gordon']:.2f}"]
+                    "Preço Justo": [f"R$ {r.get('p_bazin', 0):.2f}", f"R$ {r.get('p_graham', 0):.2f}", f"R$ {r.get('p_gordon', 0):.2f}"]
                 }))
                 
             with col_fund:
                 st.subheader("📊 Segurança & Solvência")
-                # Exibindo métricas fundamentais detalhadas
                 st.dataframe(pd.DataFrame([
-                    {"Indicador": "Liquidez Corrente (>1)", "Valor": f"{r['liq_corrente']:.2f}"},
-                    {"Indicador": "Cresc. Receita", "Valor": f"{r['cresc_receita']*100:.1f}%"},
-                    {"Indicador": "Dívida/EBITDA (<3)", "Valor": f"{r['divida_ebitda']:.2f}x"},
-                    {"Indicador": "ROE (Rentabilidade)", "Valor": f"{r['roe']*100:.1f}%"},
-                    {"Indicador": "Margem Líquida", "Valor": f"{r['margem_liq']*100:.1f}%"}
+                    {"Indicador": "Liquidez Corrente (>1)", "Valor": f"{r.get('liq_corrente', 0):.2f}"},
+                    {"Indicador": "Cresc. Receita", "Valor": f"{r.get('cresc_receita', 0)*100:.1f}%"},
+                    {"Indicador": "Dívida/EBITDA (<3)", "Valor": f"{r.get('divida_ebitda', 0):.2f}x"},
+                    {"Indicador": "ROE (Rentabilidade)", "Valor": f"{r.get('roe', 0)*100:.1f}%"},
+                    {"Indicador": "Margem Líquida", "Valor": f"{r.get('margem_liq', 0)*100:.1f}%"}
                 ]), use_container_width=True, hide_index=True)
 
             # --- SETUP ROBÔ ---
             st.subheader("🎯 Setup Operacional (Robô)")
-            sinal = r['sinal_tecnico']
+            sinal = r.get('sinal_tecnico', 'NEUTRO')
             cor_sinal = "🟢" if "COMPRA" in sinal or "ALTA" in sinal else "🔴" if "VENDA" in sinal or "BAIXA" in sinal else "⚪"
-            vol = f"{r['vol_relativo']:.1f}x Média"
-            macd_s = "↗️ Subindo" if (r['macd'] - r['macd_signal']) > 0 else "↘️ Caindo"
+            vol = f"{r.get('vol_relativo', 1):.1f}x Média"
+            macd_delta = r.get('macd', 0) - r.get('macd_signal', 0)
+            macd_s = "↗️ Subindo" if macd_delta > 0 else "↘️ Caindo"
             
             df_setup = pd.DataFrame([
                 {"Indicador": "SINAL TÉCNICO", "Valor": f"{cor_sinal} {sinal}"},
-                {"Indicador": "Preço de Entrada (Sugerido)", "Valor": f"R$ {r['preco_alvo_entrada']:.2f}" if r['preco_alvo_entrada']>0 else "-"},
+                {"Indicador": "Preço de Entrada (Sugerido)", "Valor": f"R$ {r.get('preco_alvo_entrada', 0):.2f}" if r.get('preco_alvo_entrada', 0)>0 else "-"},
                 {"Indicador": "Volume Relativo", "Valor": vol},
                 {"Indicador": "MACD", "Valor": macd_s},
-                {"Indicador": "Média Curta (9)", "Valor": f"R$ {r['mme9']:.2f}"},
-                {"Indicador": "Média Longa (21)", "Valor": f"R$ {r['mme21']:.2f}"},
-                {"Indicador": "Stop Loss (Segurança)", "Valor": f"R$ {r['stop_loss']:.2f}"}
+                {"Indicador": "Média Curta (9)", "Valor": f"R$ {r.get('mme9', 0):.2f}"},
+                {"Indicador": "Média Longa (21)", "Valor": f"R$ {r.get('mme21', 0):.2f}"},
+                {"Indicador": "Stop Loss (Segurança)", "Valor": f"R$ {r.get('stop_loss', 0):.2f}"}
             ])
             st.dataframe(df_setup, use_container_width=True, hide_index=True)
 
@@ -187,7 +189,7 @@ with tabs[0]:
             sym = t.replace(".SA", "")
             widget = f"""<div class="tradingview-widget-container"><div id="tradingview_123"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{ "width": "100%", "height": 500, "symbol": "BMFBOVESPA:{sym}", "interval": "D", "timezone": "America/Sao_Paulo", "theme": "light", "style": "1", "locale": "br", "toolbar_bg": "#f1f3f6", "enable_publishing": false, "allow_symbol_change": true, "container_id": "tradingview_123" }});</script></div>"""
             components.html(widget, height=500)
-        else: st.error("Ativo não encontrado.")
+        else: st.error("Ativo não encontrado ou dados insuficientes.")
 
 # ABA 2: CARTEIRA
 with tabs[1]:
@@ -207,8 +209,8 @@ with tabs[1]:
         bar = st.progress(0, "Calculando...")
         for i, row in st.session_state.carteira_acoes.iterrows():
             d = obter_dados(row["Ticker"])
-            p = d["preco"] if d else 0
-            s = d["score_ia"] if d else 0
+            p = d.get("preco", 0) if d else 0
+            s = d.get("score_ia", 0) if d else 0
             dados.append({**row.to_dict(), "Preço": p, "Valor_Atual": row["Qtd"]*p, "Score": s})
             bar.progress((i+1)/len(st.session_state.carteira_acoes))
         bar.empty()
