@@ -3,10 +3,27 @@ import streamlit.components.v1 as components
 import pandas as pd
 import yfinance as yf
 
-# --- CONFIGURAÇÃO (PRIMEIRA LINHA) ---
-st.set_page_config(page_title="Hedge Fund Ricardo v93", layout="wide", page_icon="💰")
+# ======================================================
+# 1. CONFIGURAÇÃO
+# ======================================================
+st.set_page_config(page_title="Hedge Fund Ricardo v95", layout="wide", page_icon="💰")
 
-# --- IMPORTAÇÃO ---
+# ======================================================
+# 2. AUTO-RESET (A SOLUÇÃO DO PROBLEMA)
+# ======================================================
+# Este bloco força o sistema a esquecer a lista antiga de 1 ativo
+if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v95":
+    st.session_state.versao_sistema = "v95"
+    # Apaga a memória velha para forçar o recarregamento dos 31 ativos
+    if "carteira_acoes" in st.session_state:
+        del st.session_state["carteira_acoes"]
+    if "df_metas" in st.session_state:
+        del st.session_state["df_metas"]
+    st.toast("Sistema atualizado! Carteira restaurada.", icon="✅")
+
+# ======================================================
+# 3. IMPORTAÇÃO
+# ======================================================
 try:
     from motor import MotorAnalise
     from rebalance import rebalancear_e_aportar
@@ -19,11 +36,14 @@ try:
     try: from report import gerar_pdf_carteira
     except: gerar_pdf_carteira = None
 except Exception as e:
-    st.error(f"Erro na importação: {e}")
+    st.error(f"Erro crítico: {e}")
     st.stop()
 
-# --- CARTEIRA REAL (31 ATIVOS) ---
+# ======================================================
+# 4. CARGA DOS 31 ATIVOS (AGORA VAI CARREGAR)
+# ======================================================
 if "carteira_acoes" not in st.session_state:
+    # SUA LISTA COMPLETA
     dados_reais = [
         ["ALZR11.SA", 100, 10.81, "FIIs-Tijolo"], ["BBAS3.SA", 1703, 24.48, "Ações-Bancos"], 
         ["BBSE3.SA", 55, 35.64, "Ações-Seguridade"], ["BTCI11.SA", 502, 10.16, "FIIs-Papel"], 
@@ -56,7 +76,9 @@ if "df_metas" not in st.session_state:
 if "carteira_rf" not in st.session_state:
     st.session_state.carteira_rf = pd.DataFrame([["Tesouro Selic", 10000.0, "Pós-Fixado"]], columns=["Ativo", "Saldo Atual", "Tipo"])
 
-# --- FUNÇÕES ---
+# ======================================================
+# 5. FUNÇÕES
+# ======================================================
 @st.cache_data(ttl=300)
 def obter_dados(ticker):
     try: return MotorAnalise().analisar(yf.Ticker(ticker).history(period="2y"), yf.Ticker(ticker).info, ticker)
@@ -79,24 +101,32 @@ def auto_classificar():
         prog.progress((i+1)/total)
     prog.empty(); st.success("Ok!")
 
-# --- UI ---
-st.title("💰 Hedge Fund Ricardo v93")
+# ======================================================
+# 6. UI
+# ======================================================
+st.title("💰 Hedge Fund Ricardo v95")
 
 with st.sidebar:
     st.header("Backup")
     csv = st.session_state.carteira_acoes.to_csv(index=False).encode('utf-8')
-    st.download_button("⬇️ Salvar Backup", csv, "backup_v93.csv", "text/csv")
+    st.download_button("⬇️ Salvar Backup", csv, "backup_v95.csv", "text/csv")
     up = st.file_uploader("📂 Restaurar", type=['csv'])
     if up:
         try:
             st.session_state.carteira_acoes = pd.read_csv(up)
             st.success("Restaurado!"); st.rerun()
         except: st.error("Erro no arquivo")
-    if st.button("🧹 Reset Cache"): st.cache_data.clear(); st.rerun()
+    
+    st.divider()
+    if st.button("🧹 Forçar Limpeza Total"): 
+        st.cache_data.clear()
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
 
 tabs = st.tabs(["🔎 Análise", "💼 Carteira", "🏢 Scanner", "🛡️ Renda Fixa", "💰 Futuro", "🦁 Fiscal", "⚡ Opções"])
 
-# ABA 1: ANÁLISE + ROBÔ (V49)
+# ABA 1: ANÁLISE + ROBÔ
 with tabs[0]:
     t = st.text_input("Ticker", "BBSE3.SA").upper()
     if st.button("Analisar"):
@@ -118,8 +148,8 @@ with tabs[0]:
             k2.info(f"**Motivos:** {r['motivos']}")
             if r['alertas']: k2.error(f"**Alertas:** {r['alertas']}")
             
-            # --- SETUP ROBÔ (V49) ---
-            st.subheader("🎯 Setup Robô (Restaurado)")
+            # --- SETUP ROBÔ ---
+            st.subheader("🎯 Setup Robô")
             sinal = r['sinal_tecnico']
             cor_sinal = "🟢" if "COMPRA" in sinal or "ALTA" in sinal else "🔴" if "VENDA" in sinal or "BAIXA" in sinal else "⚪"
             vol = f"{r['vol_relativo']:.1f}x"
@@ -134,14 +164,13 @@ with tabs[0]:
             ])
             st.dataframe(df_setup, use_container_width=True, hide_index=True)
 
-            # GRÁFICO
             st.subheader("Gráfico")
             sym = t.replace(".SA", "")
             widget = f"""<div class="tradingview-widget-container"><div id="tradingview_123"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{ "width": "100%", "height": 500, "symbol": "BMFBOVESPA:{sym}", "interval": "D", "timezone": "America/Sao_Paulo", "theme": "light", "style": "1", "locale": "br", "toolbar_bg": "#f1f3f6", "enable_publishing": false, "allow_symbol_change": true, "container_id": "tradingview_123" }});</script></div>"""
             components.html(widget, height=500)
         else: st.error("Ativo não encontrado.")
 
-# ABA 2: CARTEIRA
+# ABA 2: CARTEIRA (COM AUTO-RESET)
 with tabs[1]:
     c1, c2 = st.columns([1, 2])
     c1.subheader("Metas %")
