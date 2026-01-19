@@ -6,16 +6,16 @@ import yfinance as yf
 # ======================================================
 # 1. CONFIGURAÇÃO
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo v97", layout="wide", page_icon="💰")
+st.set_page_config(page_title="Hedge Fund Ricardo v100", layout="wide", page_icon="💰")
 
 # ======================================================
-# 2. AUTO-RESET (PARA CARREGAR OS 31 ATIVOS E LIMPAR ERROS)
+# 2. AUTO-RESET (LIMPEZA PARA A VERSÃO 100)
 # ======================================================
-if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v97":
-    st.session_state.versao_sistema = "v97"
+if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v100":
+    st.session_state.versao_sistema = "v100"
     st.cache_data.clear()
-    if "carteira_acoes" in st.session_state: del st.session_state["carteira_acoes"]
-    st.toast("Sistema atualizado e carteira restaurada!", icon="✅")
+    # Mantém a carteira salva, só limpa o cache técnico
+    st.toast("Versão 100 carregada! Quadro de Dividendos Restaurado.", icon="💎")
 
 # ======================================================
 # 3. IMPORTAÇÃO
@@ -36,7 +36,7 @@ except Exception as e:
     st.stop()
 
 # ======================================================
-# 4. SEUS 31 ATIVOS (FIXOS NO CÓDIGO)
+# 4. CARGA DOS 31 ATIVOS
 # ======================================================
 if "carteira_acoes" not in st.session_state:
     dados_reais = [
@@ -72,17 +72,32 @@ if "carteira_rf" not in st.session_state:
     st.session_state.carteira_rf = pd.DataFrame([["Tesouro Selic", 10000.0, "Pós-Fixado"]], columns=["Ativo", "Saldo Atual", "Tipo"])
 
 # ======================================================
-# 5. FUNÇÕES
+# 5. FUNÇÕES INTELIGENTES (GLOBAL + DIVIDENDOS)
 # ======================================================
+def formatar_ticker_global(t):
+    t = t.upper().strip()
+    if t in ["BTC", "ETH", "SOL", "USDT", "ADA", "DOGE"]: return f"{t}-USD"
+    if "." in t or "-" in t or "=" in t: return t
+    if any(char.isdigit() for char in t): return f"{t}.SA"
+    return t
+
 @st.cache_data(ttl=300)
-def obter_dados(ticker):
-    try: return MotorAnalise().analisar(yf.Ticker(ticker).history(period="2y"), yf.Ticker(ticker).info, ticker)
+def obter_dados(ticker_raw):
+    ticker = formatar_ticker_global(ticker_raw)
+    try: 
+        ticker_obj = yf.Ticker(ticker)
+        hist = ticker_obj.history(period="2y")
+        if hist is None or hist.empty: return None
+        try: info = ticker_obj.info
+        except: info = {}
+        return MotorAnalise().analisar(hist, info, ticker)
     except: return None
 
 @st.cache_data(ttl=86400)
-def download_longo(tickers):
+def download_longo(tickers_raw):
+    lista_formatada = [formatar_ticker_global(t) for t in tickers_raw]
     try:
-        d = yf.download(tickers, period="5y", progress=False)
+        d = yf.download(lista_formatada, period="5y", progress=False)
         return d["Adj Close"] if "Adj Close" in d else d["Close"]
     except: return pd.DataFrame()
 
@@ -91,20 +106,20 @@ def auto_classificar():
     prog = st.progress(0, "Classificando...")
     total = len(st.session_state.carteira_acoes)
     for i, row in st.session_state.carteira_acoes.iterrows():
-        try: st.session_state.carteira_acoes.at[i, "Setor"] = motor.identificar_setor(yf.Ticker(row["Ticker"]).info, row["Ticker"])
+        try: st.session_state.carteira_acoes.at[i, "Setor"] = motor.identificar_setor(yf.Ticker(formatar_ticker_global(row["Ticker"])).info, row["Ticker"])
         except: st.session_state.carteira_acoes.at[i, "Setor"] = "Outros"
         prog.progress((i+1)/total)
-    prog.empty(); st.success("Ok!")
+    prog.empty(); st.success("Classificação Concluída!")
 
 # ======================================================
-# 6. UI BLINDADA (USANDO .get)
+# 6. UI
 # ======================================================
-st.title("💰 Hedge Fund Ricardo v97")
+st.title("💰 Hedge Fund Ricardo v100")
 
 with st.sidebar:
     st.header("Backup Seguro")
     csv = st.session_state.carteira_acoes.to_csv(index=False).encode('utf-8')
-    st.download_button("⬇️ Salvar Backup", csv, "backup_v97.csv", "text/csv")
+    st.download_button("⬇️ Salvar Backup", csv, "backup_v100.csv", "text/csv")
     up = st.file_uploader("📂 Restaurar", type=['csv'])
     if up:
         try:
@@ -117,13 +132,20 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-tabs = st.tabs(["🔎 Análise Completa", "💼 Carteira", "🏢 Scanner", "🛡️ Renda Fixa", "💰 Futuro", "🦁 Fiscal", "⚡ Opções"])
+tabs = st.tabs(["🔎 Análise Global", "💼 Carteira", "🏢 Scanner", "🛡️ Renda Fixa", "💰 Futuro", "🦁 Fiscal", "⚡ Opções"])
 
-# ABA 1: ANÁLISE COMPLETA (BLINDADA COM .get)
+# ABA 1: ANÁLISE GLOBAL (COM QUADRO DE DIVIDENDOS RESTAURADO)
 with tabs[0]:
-    t = st.text_input("Ticker", "BBSE3.SA").upper()
-    if st.button("Analisar"):
-        r = obter_dados(t)
+    c_input, c_btn = st.columns([3, 1])
+    with c_input:
+        t_input = st.text_input("Ticker", "BBSE3", label_visibility="collapsed", placeholder="Ex: BBSE3, AAPL, BTC...")
+    with c_btn:
+        btn_analisar = st.button("Analisar", use_container_width=True)
+
+    if btn_analisar:
+        t_fmt = formatar_ticker_global(t_input)
+        r = obter_dados(t_input)
+        
         if r:
             # --- CABEÇALHO ---
             c_score, c_veredito = st.columns([1, 3])
@@ -134,25 +156,42 @@ with tabs[0]:
             
             st.divider()
 
-            # --- LINHA DE MÉTRICAS (RSI, VOL, ETC) ---
+            # --- LINHA DE MÉTRICAS ---
             k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Preço Atual", f"R$ {r.get('preco', 0):.2f}")
-            k2.metric("Teto (Stop Gain)", f"R$ {r.get('stop_gain', 0):.2f}")
+            k1.metric("Preço Atual", f"{r.get('preco', 0):.2f}")
+            k2.metric("Teto (Stop Gain)", f"{r.get('stop_gain', 0):.2f}")
             
             rsi_val = r.get('rsi', 50)
             k3.metric("RSI (14)", f"{rsi_val:.0f}", delta="Sobrecomprado" if rsi_val>70 else "Sobrevendido" if rsi_val<30 else "Neutro", delta_color="inverse")
             k4.metric("Volatilidade", f"{r.get('volatilidade', 0)*100:.1f}%")
 
+            # --- QUADRO DE PROVENTOS (RESTAURADO DA V49) ---
+            st.divider()
+            st.subheader("💰 Raio-X de Proventos (Dividendos)")
+            
+            # Chama a função de dividendos do Motor (que já existe no v97)
+            motor_div = MotorAnalise()
+            div_info = motor_div.consultar_dividendos(t_fmt)
+            
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("Último Pago", div_info.get('ultimo_valor', '-'), div_info.get('ultimo_data', '-'))
+            
+            # Se tiver próximo agendado, destaca em verde
+            cor_prox = "normal" if div_info.get('status') == 'AGENDA' else "off"
+            d2.metric("Próximo (Prev.)", div_info.get('proximo_valor', '-'), div_info.get('proximo_data', '-'), delta_color=cor_prox)
+            
+            d3.metric("DY Anual (12m)", f"{r.get('dy_anual', 0):.2f}%")
+            d4.metric("Status", div_info.get('status', 'NEUTRO'))
+            
             st.divider()
 
-            # --- FUNDAMENTOS (BLINDADO) ---
+            # --- FUNDAMENTOS ---
             col_val, col_fund = st.columns(2)
-            
             with col_val:
                 st.subheader("📋 Valuation")
                 st.table(pd.DataFrame({
-                    "Modelo": ["Bazin (Dividendos)", "Graham (Patrimonial)", "Gordon (Crescimento)"],
-                    "Preço Justo": [f"R$ {r.get('p_bazin', 0):.2f}", f"R$ {r.get('p_graham', 0):.2f}", f"R$ {r.get('p_gordon', 0):.2f}"]
+                    "Modelo": ["Bazin (Div.)", "Graham (Patrim.)", "Gordon (Cresc.)"],
+                    "Preço Justo": [f"{r.get('p_bazin', 0):.2f}", f"{r.get('p_graham', 0):.2f}", f"{r.get('p_gordon', 0):.2f}"]
                 }))
                 
             with col_fund:
@@ -175,30 +214,34 @@ with tabs[0]:
             
             df_setup = pd.DataFrame([
                 {"Indicador": "SINAL TÉCNICO", "Valor": f"{cor_sinal} {sinal}"},
-                {"Indicador": "Preço de Entrada (Sugerido)", "Valor": f"R$ {r.get('preco_alvo_entrada', 0):.2f}" if r.get('preco_alvo_entrada', 0)>0 else "-"},
+                {"Indicador": "Preço de Entrada (Sugerido)", "Valor": f"{r.get('preco_alvo_entrada', 0):.2f}" if r.get('preco_alvo_entrada', 0)>0 else "-"},
                 {"Indicador": "Volume Relativo", "Valor": vol},
                 {"Indicador": "MACD", "Valor": macd_s},
-                {"Indicador": "Média Curta (9)", "Valor": f"R$ {r.get('mme9', 0):.2f}"},
-                {"Indicador": "Média Longa (21)", "Valor": f"R$ {r.get('mme21', 0):.2f}"},
-                {"Indicador": "Stop Loss (Segurança)", "Valor": f"R$ {r.get('stop_loss', 0):.2f}"}
+                {"Indicador": "Média Curta (9)", "Valor": f"{r.get('mme9', 0):.2f}"},
+                {"Indicador": "Média Longa (21)", "Valor": f"{r.get('mme21', 0):.2f}"},
+                {"Indicador": "Stop Loss (Segurança)", "Valor": f"{r.get('stop_loss', 0):.2f}"}
             ])
             st.dataframe(df_setup, use_container_width=True, hide_index=True)
 
-            # GRÁFICO
+            # GRÁFICO GLOBAL
             st.subheader("Gráfico Interativo")
-            sym = t.replace(".SA", "")
-            widget = f"""<div class="tradingview-widget-container"><div id="tradingview_123"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{ "width": "100%", "height": 500, "symbol": "BMFBOVESPA:{sym}", "interval": "D", "timezone": "America/Sao_Paulo", "theme": "light", "style": "1", "locale": "br", "toolbar_bg": "#f1f3f6", "enable_publishing": false, "allow_symbol_change": true, "container_id": "tradingview_123" }});</script></div>"""
-            components.html(widget, height=500)
-        else: st.error("Ativo não encontrado ou dados insuficientes.")
+            if ".SA" in t_fmt: symbol_tv = "BMFBOVESPA:" + t_fmt.replace(".SA", "")
+            elif "-USD" in t_fmt: symbol_tv = "BINANCE:" + t_fmt.replace("-USD", "USDT")
+            else: symbol_tv = "NASDAQ:" + t_fmt
 
-# ABA 2: CARTEIRA
+            widget = f"""<div class="tradingview-widget-container"><div id="tradingview_123"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{ "width": "100%", "height": 500, "symbol": "{symbol_tv}", "interval": "D", "timezone": "America/Sao_Paulo", "theme": "light", "style": "1", "locale": "br", "toolbar_bg": "#f1f3f6", "enable_publishing": false, "allow_symbol_change": true, "container_id": "tradingview_123" }});</script></div>"""
+            components.html(widget, height=500)
+        else: 
+            st.error(f"Ativo '{t_input}' não encontrado (Tentativa: {t_fmt}).")
+
+# ABA 2: CARTEIRA GLOBAL
 with tabs[1]:
     c1, c2 = st.columns([1, 2])
     c1.subheader("Metas %")
     st.session_state.df_metas = c1.data_editor(st.session_state.df_metas, num_rows="dynamic")
     
     c2.subheader(f"Meus Ativos ({len(st.session_state.carteira_acoes)})")
-    if c2.button("Classificar"): auto_classificar()
+    if c2.button("Classificar (Global)"): auto_classificar()
     
     st.session_state.carteira_acoes = c2.data_editor(st.session_state.carteira_acoes, num_rows="dynamic", column_config={"Setor": st.column_config.SelectboxColumn("Setor", options=st.session_state.df_metas["Setor"].tolist())}, use_container_width=True)
     
@@ -206,7 +249,7 @@ with tabs[1]:
     if c2.button("Calcular Rebalanceamento"):
         m = dict(zip(st.session_state.df_metas["Setor"], st.session_state.df_metas["Meta (%)"]))
         dados = []
-        bar = st.progress(0, "Calculando...")
+        bar = st.progress(0, "Calculando (Global)...")
         for i, row in st.session_state.carteira_acoes.iterrows():
             d = obter_dados(row["Ticker"])
             p = d.get("preco", 0) if d else 0
