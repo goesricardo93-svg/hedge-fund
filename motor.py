@@ -24,16 +24,22 @@ class MotorAnalise:
             # --- 1. DADOS DE MERCADO ---
             fechamento = hist["Close"]
             volume = hist["Volume"]
+            
+            # Proteção de dados mínimos
             if len(fechamento) < 30: return None
+            
             preco_atual = float(fechamento.iloc[-1])
 
-            # --- 2. TÉCNICA (SETUP COMPLETO) ---
-            # Médias
+            # --- 2. TÉCNICA (CÁLCULOS COMPLETOS) ---
+            # Médias Móveis
             mme9 = fechamento.ewm(span=9, adjust=False).mean()
             mme21 = fechamento.ewm(span=21, adjust=False).mean()
             
-            curta, longa = float(mme9.iloc[-1]), float(mme21.iloc[-1])
-            curta_ant, longa_ant = float(mme9.iloc[-2]), float(mme21.iloc[-2])
+            # Definição explícita para evitar erro de variável
+            curta = float(mme9.iloc[-1])
+            longa = float(mme21.iloc[-1])
+            curta_ant = float(mme9.iloc[-2])
+            longa_ant = float(mme21.iloc[-2])
 
             # MACD
             ema12 = fechamento.ewm(span=12, adjust=False).mean()
@@ -44,9 +50,10 @@ class MotorAnalise:
             macd_val = float(macd_line.iloc[-1])
             signal_val = float(signal_line.iloc[-1])
 
-            # Volume
+            # Volume Relativo
             vol_media = volume.rolling(20).mean().iloc[-1]
-            vol_relativo = (float(volume.iloc[-1]) / vol_media) if vol_media > 0 else 0.0
+            vol_atual = float(volume.iloc[-1])
+            vol_relativo = (vol_atual / vol_media) if vol_media > 0 else 0.0
 
             # RSI & Volatilidade
             retornos = fechamento.pct_change().dropna()
@@ -64,7 +71,7 @@ class MotorAnalise:
             stop_loss = suporte * 0.97
             stop_gain = resistencia * 1.02
 
-            # Sinal Técnico
+            # Sinal Técnico e Preço Alvo (Lógica V49)
             sinal_tecnico = "NEUTRO"
             preco_alvo_entrada = 0.0
             
@@ -79,7 +86,7 @@ class MotorAnalise:
             elif curta < longa:
                 sinal_tecnico = "📉 TENDÊNCIA BAIXA"
 
-            # --- 3. DIVIDENDOS (SEGURANÇA 1214%) ---
+            # --- 3. DIVIDENDOS (CÁLCULO MANUAL OBRIGATÓRIO) ---
             dy_anual = 0.0
             try:
                 t_obj = yf.Ticker(ticker)
@@ -131,55 +138,74 @@ class MotorAnalise:
                 validos = [x for x in [p_bazin, p_graham] if x > 0]
                 preco_justo = sum(validos)/len(validos) if validos else 0
 
-            # --- 5. SCORE IA (CALIBRAGEM V94 - SEUS 10 CRITÉRIOS) ---
+            # --- 5. SCORE DE PRECISÃO (OS 10 CRITÉRIOS REAIS) ---
             score = 50
             motivos = []
             alertas = []
-
-            # 1. Tendência (Cruzamento ou Alta)
-            if "COMPRA" in sinal_tecnico or "ALTA" in sinal_tecnico:
-                score += 15; motivos.append("Tendência Alta (+15)")
-            elif "VENDA" in sinal_tecnico or "BAIXA" in sinal_tecnico:
-                score -= 15; alertas.append("Tendência Baixa (-15)")
-
-            # 2. MACD Positivo
-            if macd_val > signal_val: 
-                score += 5; motivos.append("MACD Compra (+5)")
-
-            # 3. Volume Forte (> 20% acima da média)
-            if vol_relativo > 1.2: 
-                score += 5; motivos.append("Volume Forte (+5)")
-
-            # 4. RSI Oportunidade ou Risco
-            if rsi < 30: 
-                score += 10; motivos.append("RSI Sobrevendido (+10)")
-            elif rsi > 70: 
-                score -= 10; alertas.append("RSI Esticado (-10)")
-
-            if is_fii:
-                # Regras Específicas FII
-                if 0.85 <= pvp <= 1.10: score += 15; motivos.append("P/VP Justo")
-                elif pvp > 1.15: score -= 10
-                if dy_anual > 8.0: score += 10; motivos.append("DY Alto")
+            
+            # [KILL SWITCH] Travas de Segurança Absoluta
+            if vol_atual * preco_atual < 50000: # Liquidez < 50k
+                 score = 0; alertas.append("⛔ SEM LIQUIDEZ")
+            
             else:
-                # 5 & 6. Valuation (Bazin + Graham)
-                if p_bazin > preco_atual: score += 10; motivos.append("Desc. Bazin (+10)")
-                if p_graham > preco_atual: score += 10; motivos.append("Desc. Graham (+10)")
+                # 1. Tendência (+15/-15)
+                if "COMPRA" in sinal_tecnico or "ALTA" in sinal_tecnico:
+                    score += 15; motivos.append("Tendência Alta (+15)")
+                elif "VENDA" in sinal_tecnico or "BAIXA" in sinal_tecnico:
+                    score -= 15; alertas.append("Tendência Baixa (-15)")
 
-                # 7. Qualidade (ROE)
-                if roe > 0.15: score += 10; motivos.append(f"ROE {roe*100:.0f}% (+10)")
+                # 2. MACD (+5)
+                if macd_val > signal_val: 
+                    score += 5; motivos.append("MACD Compra (+5)")
 
-                # 8. Crescimento
-                if cresc_receita > 0.10: score += 10; motivos.append("Cresc. Receita (+10)")
-                elif cresc_receita < -0.05: score -= 5; alertas.append("Receita Caindo")
+                # 3. Volume (+5)
+                if vol_relativo > 1.2: 
+                    score += 5; motivos.append("Volume Forte (+5)")
 
-                # 9. Dividendos
-                if dy_anual > 6.0: score += 5; motivos.append("Bom Pagador (+5)")
+                # 4. RSI (+10 / -10)
+                if rsi < 30: 
+                    score += 10; motivos.append("RSI Oportunidade (+10)")
+                elif rsi > 70: 
+                    score -= 10; alertas.append("RSI Esticado (-10)")
 
-                # 10. Dívida (Penalidade)
-                if divida_ebitda > 3.5: score -= 15; alertas.append("Dívida Alta (-15)")
+                if is_fii:
+                    # Lógica FII (Adaptada aos 10 pontos de FII)
+                    if 0.85 <= pvp <= 1.05: score += 15; motivos.append("P/VP Justo (+15)")
+                    elif pvp > 1.15: score -= 10; alertas.append("FII Caro (-10)")
+                    
+                    if dy_anual > 8.0: score += 10; motivos.append(f"DY {dy_anual:.1f}% (+10)")
+                    elif dy_anual < 4.0: score -= 5
+                    
+                    if volatilidade < 0.2: score += 5; motivos.append("Baixa Volat. (+5)")
 
-            # Travas de Segurança
+                else:
+                    # 5. Valuation Bazin (+10)
+                    if p_bazin > preco_atual: 
+                        score += 10; motivos.append("Desc. Bazin (+10)")
+
+                    # 6. Valuation Graham (+10)
+                    if p_graham > preco_atual: 
+                        score += 10; motivos.append("Desc. Graham (+10)")
+
+                    # 7. Qualidade ROE (+10)
+                    if roe > 0.15: 
+                        score += 10; motivos.append(f"ROE {roe*100:.0f}% (+10)")
+
+                    # 8. Crescimento (+10)
+                    if cresc_receita > 0.10: 
+                        score += 10; motivos.append("Cresc. Receita (+10)")
+                    elif cresc_receita < -0.05: 
+                        score -= 5; alertas.append("Receita Caindo (-5)")
+
+                    # 9. Dividendos (+5)
+                    if dy_anual > 6.0: 
+                        score += 5; motivos.append("Bom Pagador (+5)")
+
+                    # 10. Dívida (Penalidade -15)
+                    if divida_ebitda > 3.5: 
+                        score -= 15; alertas.append("Dívida Perigosa (-15)")
+
+            # Finalização
             score = min(100, max(0, score))
 
             if score >= 80: decisao = "🟢🟢 COMPRA FORTE"
