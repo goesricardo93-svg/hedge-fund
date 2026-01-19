@@ -6,15 +6,15 @@ import yfinance as yf
 # ======================================================
 # 1. CONFIGURAÇÃO
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo v104", layout="wide", page_icon="💰")
+st.set_page_config(page_title="Hedge Fund Ricardo v105", layout="wide", page_icon="💰")
 
 # ======================================================
-# 2. AUTO-RESET
+# 2. AUTO-RESET INTELIGENTE
 # ======================================================
-if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v104":
-    st.session_state.versao_sistema = "v104"
+if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v105":
+    st.session_state.versao_sistema = "v105"
     st.cache_data.clear()
-    st.toast("FIIs: Dívida e Tendência analisadas!", icon="📉")
+    st.toast("Sistema v105 Ativo! Lógica Cruzada FIIs + Carteira Fixa.", icon="🛡️")
 
 # ======================================================
 # 3. IMPORTAÇÃO
@@ -35,9 +35,9 @@ except Exception as e:
     st.stop()
 
 # ======================================================
-# 4. CARGA DOS 31 ATIVOS
+# 4. CARGA DOS 31 ATIVOS (INJEÇÃO FORÇADA)
 # ======================================================
-if "carteira_acoes" not in st.session_state:
+def carregar_carteira_padrao():
     dados_reais = [
         ["ALZR11.SA", 100, 10.81, "FIIs-Tijolo"], ["BBAS3.SA", 1703, 24.48, "Ações-Bancos"], 
         ["BBSE3.SA", 55, 35.64, "Ações-Seguridade"], ["BTCI11.SA", 502, 10.16, "FIIs-Papel"], 
@@ -56,7 +56,11 @@ if "carteira_acoes" not in st.session_state:
         ["XPCA11.SA", 110, 8.77, "FIIs-Outros"], ["XPLG11.SA", 26, 102.31, "FIIs-Tijolo"],
         ["XPML11.SA", 10, 106.05, "FIIs-Tijolo"]
     ]
-    st.session_state.carteira_acoes = pd.DataFrame(dados_reais, columns=["Ticker", "Qtd", "PM", "Setor"])
+    return pd.DataFrame(dados_reais, columns=["Ticker", "Qtd", "PM", "Setor"])
+
+# Verifica se não existe OU se está vazia
+if "carteira_acoes" not in st.session_state or st.session_state.carteira_acoes.empty:
+    st.session_state.carteira_acoes = carregar_carteira_padrao()
 
 if "df_metas" not in st.session_state:
     st.session_state.df_metas = pd.DataFrame([
@@ -113,13 +117,13 @@ def auto_classificar():
 # ======================================================
 # 6. UI
 # ======================================================
-st.title("💰 Hedge Fund Ricardo v104")
+st.title("💰 Hedge Fund Ricardo v105")
 
 with st.sidebar:
     st.header("Backup")
     csv = st.session_state.carteira_acoes.to_csv(index=False).encode('utf-8')
-    st.download_button("⬇️ Salvar Backup", csv, "backup_v104.csv", "text/csv")
-    up = st.file_uploader("📂 Restaurar", type=['csv'])
+    st.download_button("⬇️ Salvar Backup", csv, "backup_v105.csv", "text/csv")
+    up = st.file_uploader("📂 Restaurar Backup", type=['csv'])
     if up:
         try:
             st.session_state.carteira_acoes = pd.read_csv(up)
@@ -127,9 +131,13 @@ with st.sidebar:
         except: st.error("Erro no arquivo")
     
     st.divider()
-    if st.button("🧹 Limpeza Total"): 
+    # BOTÃO DE EMERGÊNCIA
+    if st.button("🆘 Restaurar Carteira Padrão"): 
+        st.session_state.carteira_acoes = carregar_carteira_padrao()
+        st.rerun()
+
+    if st.button("🧹 Limpeza de Cache"): 
         st.cache_data.clear()
-        for k in list(st.session_state.keys()): del st.session_state[k]
         st.rerun()
 
 tabs = st.tabs(["🔎 Análise Global", "💼 Carteira", "🏢 Scanner", "🛡️ Renda Fixa", "💰 Futuro", "🦁 Fiscal", "⚡ Opções"])
@@ -183,7 +191,7 @@ with tabs[0]:
 
             with col_rob:
                 if r.get('tipo_ativo') == 'FII':
-                    st.subheader("🏗️ Setup FIIs")
+                    st.subheader("🏗️ Setup FIIs (Rigidez: P/VP < 1.02)")
                     pvp = r.get('pvp', 0)
                     alav = r.get('alavancagem', 0)
                     lbl_pvp = "🟢 Barato" if pvp < 1.0 else "🔴 Caro (>1.02)" if pvp > 1.02 else "⚪ Justo"
@@ -217,6 +225,38 @@ with tabs[0]:
             components.html(widget, height=500)
         else: 
             st.error(f"Ativo '{t_input}' não encontrado.")
+
+# ABA 2: CARTEIRA (COM CORREÇÃO DE EXIBIÇÃO)
+with tabs[1]:
+    c1, c2 = st.columns([1, 2])
+    c1.subheader("Metas %")
+    st.session_state.df_metas = c1.data_editor(st.session_state.df_metas, num_rows="dynamic")
+    
+    c2.subheader(f"Meus Ativos ({len(st.session_state.carteira_acoes)})")
+    if c2.button("Classificar (Global)"): auto_classificar()
+    
+    # Exibe a carteira mesmo se estiver vazia (mas agora o auto-reset impede que esteja vazia)
+    st.session_state.carteira_acoes = c2.data_editor(
+        st.session_state.carteira_acoes, 
+        num_rows="dynamic", 
+        column_config={"Setor": st.column_config.SelectboxColumn("Setor", options=st.session_state.df_metas["Setor"].tolist())}, 
+        use_container_width=True
+    )
+    
+    aporte = c2.number_input("Aporte", 5000.0)
+    if c2.button("Calcular Rebalanceamento"):
+        m = dict(zip(st.session_state.df_metas["Setor"], st.session_state.df_metas["Meta (%)"]))
+        dados = []
+        bar = st.progress(0, "Calculando (Global)...")
+        for i, row in st.session_state.carteira_acoes.iterrows():
+            d = obter_dados(row["Ticker"])
+            p = d.get("preco", 0) if d else 0
+            s = d.get("score_ia", 0) if d else 0
+            dados.append({**row.to_dict(), "Preço": p, "Valor_Atual": row["Qtd"]*p, "Score": s})
+            bar.progress((i+1)/len(st.session_state.carteira_acoes))
+        bar.empty()
+        res = rebalancear_e_aportar(pd.DataFrame(dados), aporte, m)
+        st.dataframe(res[res["Aporte Sugerido (R$)"] > 0.01].style.format({"Aporte Sugerido (R$)": "R$ {:.2f}"}), use_container_width=True)
 
 # DEMAIS ABAS
 with tabs[2]:
