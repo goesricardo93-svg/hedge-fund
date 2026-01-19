@@ -21,18 +21,22 @@ class MotorAnalise:
         try:
             if hist is None or hist.empty: return None
             
-            # --- 1. DADOS DE MERCADO ---
             fechamento = hist["Close"]
             volume = hist["Volume"]
             if len(fechamento) < 30: return None
             preco_atual = float(fechamento.iloc[-1])
 
-            # --- 2. TÉCNICA (SETUP) ---
+            # --- ANÁLISE TÉCNICA (O ERRO ESTAVA AQUI) ---
             mme9 = fechamento.ewm(span=9, adjust=False).mean()
             mme21 = fechamento.ewm(span=21, adjust=False).mean()
-            curta, longa = float(mme9.iloc[-1]), float(mme21.iloc[-1])
-            curta_ant, longa_ant = float(mme9.iloc[-2]), float(mme21.iloc[-2])
+            
+            # AGORA DEFINIMOS AS VARIÁVEIS EXPLICITAMENTE PARA NÃO DAR TELA BRANCA
+            curta = float(mme9.iloc[-1])
+            longa = float(mme21.iloc[-1])
+            curta_ant = float(mme9.iloc[-2])
+            longa_ant = float(mme21.iloc[-2])
 
+            # MACD
             ema12 = fechamento.ewm(span=12, adjust=False).mean()
             ema26 = fechamento.ewm(span=26, adjust=False).mean()
             macd_line = ema12 - ema26
@@ -40,10 +44,11 @@ class MotorAnalise:
             macd_val = float(macd_line.iloc[-1])
             signal_val = float(signal_line.iloc[-1])
 
+            # Volume
             vol_media = volume.rolling(20).mean().iloc[-1]
-            vol_atual = float(volume.iloc[-1])
-            vol_relativo = (vol_atual / vol_media) if vol_media > 0 else 0.0
+            vol_relativo = (float(volume.iloc[-1]) / vol_media) if vol_media > 0 else 0.0
 
+            # RSI & Volatilidade
             retornos = fechamento.pct_change().dropna()
             volatilidade = retornos.std() * (252 ** 0.5) if not retornos.empty else 0.0
             
@@ -53,11 +58,13 @@ class MotorAnalise:
             if loss.iloc[-1] == 0: rsi = 50.0
             else: rsi = 100.0 - (100.0 / (1.0 + (gain.iloc[-1]/loss.iloc[-1])))
 
+            # Níveis
             suporte = float(fechamento.tail(60).min())
             resistencia = float(fechamento.tail(60).max())
             stop_loss = suporte * 0.97
             stop_gain = resistencia * 1.02
 
+            # Sinal Técnico
             sinal_tecnico = "NEUTRO"
             preco_alvo_entrada = 0.0
             if curta > longa and curta_ant <= longa_ant:
@@ -71,7 +78,7 @@ class MotorAnalise:
             elif curta < longa:
                 sinal_tecnico = "📉 TENDÊNCIA BAIXA"
 
-            # --- 3. DIVIDENDOS (MANUAL) ---
+            # --- DIVIDENDOS (MANUAL) ---
             dy_anual = 0.0
             try:
                 t_obj = yf.Ticker(ticker)
@@ -81,12 +88,13 @@ class MotorAnalise:
                     soma = divs[divs.index >= corte].sum()
                     if preco_atual > 0: dy_anual = (soma/preco_atual)*100
             except: pass
+
             if dy_anual == 0:
                 val = info.get("dividendYield", 0)
                 if val is not None: dy_anual = val * 100
             if dy_anual > 200.0: dy_anual /= 100.0
 
-            # --- 4. FUNDAMENTOS ---
+            # --- FUNDAMENTOS ---
             def safe_float(v):
                 try: return float(v) if v is not None else 0.0
                 except: return 0.0
@@ -97,7 +105,6 @@ class MotorAnalise:
                 if vpa_c > 0: pvp = preco_atual/vpa_c
                 elif "11.SA" in ticker: pvp = 1.0
 
-            # Métricas da V49 restauradas
             liq_corrente = safe_float(info.get("currentRatio"))
             cresc_receita = safe_float(info.get("revenueGrowth"))
             roe = safe_float(info.get("returnOnEquity"))
@@ -120,18 +127,21 @@ class MotorAnalise:
                 validos = [x for x in [p_bazin, p_graham] if x > 0]
                 preco_justo = sum(validos)/len(validos) if validos else 0
 
-            # --- 5. SCORE ---
+            # --- SCORE ---
             score = 50
             motivos = []
             alertas = []
 
             # KILL SWITCH
+            vol_atual = float(volume.iloc[-1])
             if vol_atual * preco_atual < 50000: score = 0; alertas.append("SEM LIQUIDEZ")
             else:
                 if "COMPRA" in sinal_tecnico or "ALTA" in sinal_tecnico: score += 15; motivos.append("Tendência Alta")
                 elif "VENDA" in sinal_tecnico or "BAIXA" in sinal_tecnico: score -= 15; alertas.append("Tendência Baixa")
+                
                 if macd_val > signal_val: score += 5; motivos.append("MACD+")
                 if vol_relativo > 1.2: score += 5; motivos.append("Volume+")
+                
                 if rsi < 30: score += 10; motivos.append("RSI Baixo")
                 elif rsi > 70: score -= 10; alertas.append("RSI Alto")
 
