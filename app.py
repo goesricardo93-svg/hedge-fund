@@ -6,15 +6,15 @@ import yfinance as yf
 # ======================================================
 # 1. CONFIGURAÇÃO
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo v102", layout="wide", page_icon="💰")
+st.set_page_config(page_title="Hedge Fund Ricardo v104", layout="wide", page_icon="💰")
 
 # ======================================================
 # 2. AUTO-RESET
 # ======================================================
-if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v102":
-    st.session_state.versao_sistema = "v102"
+if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v104":
+    st.session_state.versao_sistema = "v104"
     st.cache_data.clear()
-    st.toast("FIIs: P/VP > 1.02 penalizado! Opções Formatadas.", icon="📉")
+    st.toast("FIIs: Dívida e Tendência analisadas!", icon="📉")
 
 # ======================================================
 # 3. IMPORTAÇÃO
@@ -113,12 +113,12 @@ def auto_classificar():
 # ======================================================
 # 6. UI
 # ======================================================
-st.title("💰 Hedge Fund Ricardo v102")
+st.title("💰 Hedge Fund Ricardo v104")
 
 with st.sidebar:
     st.header("Backup")
     csv = st.session_state.carteira_acoes.to_csv(index=False).encode('utf-8')
-    st.download_button("⬇️ Salvar Backup", csv, "backup_v102.csv", "text/csv")
+    st.download_button("⬇️ Salvar Backup", csv, "backup_v104.csv", "text/csv")
     up = st.file_uploader("📂 Restaurar", type=['csv'])
     if up:
         try:
@@ -129,6 +129,7 @@ with st.sidebar:
     st.divider()
     if st.button("🧹 Limpeza Total"): 
         st.cache_data.clear()
+        for k in list(st.session_state.keys()): del st.session_state[k]
         st.rerun()
 
 tabs = st.tabs(["🔎 Análise Global", "💼 Carteira", "🏢 Scanner", "🛡️ Renda Fixa", "💰 Futuro", "🦁 Fiscal", "⚡ Opções"])
@@ -182,14 +183,18 @@ with tabs[0]:
 
             with col_rob:
                 if r.get('tipo_ativo') == 'FII':
-                    st.subheader("🏗️ Setup FIIs (Rigidez: P/VP < 1.02)")
+                    st.subheader("🏗️ Setup FIIs")
                     pvp = r.get('pvp', 0)
+                    alav = r.get('alavancagem', 0)
                     lbl_pvp = "🟢 Barato" if pvp < 1.0 else "🔴 Caro (>1.02)" if pvp > 1.02 else "⚪ Justo"
+                    lbl_alav = "⚠️ Alta" if alav > 0.3 else "🟢 OK"
+                    
                     df_setup = pd.DataFrame([
                         {"Indicador": "ANÁLISE FII", "Valor": f"{r.get('decisao_ia')}"},
+                        {"Indicador": "Tendência Gráfica", "Valor": f"{r.get('sinal_tecnico')}"},
+                        {"Indicador": "Alavancagem (Dívida)", "Valor": f"{alav*100:.1f}% ({lbl_alav})"},
                         {"Indicador": "P/VP (Limite 1.02)", "Valor": f"{pvp:.2f}x ({lbl_pvp})"},
                         {"Indicador": "Preço Teto (Bazin)", "Valor": f"{r.get('p_bazin', 0):.2f}"},
-                        {"Indicador": "DY vs Selic", "Valor": f"{r.get('dy_anual',0):.1f}%"},
                     ])
                     st.dataframe(df_setup, use_container_width=True, hide_index=True)
                 else:
@@ -244,12 +249,9 @@ with tabs[6]:
             T_dias = st.number_input("Dias até Vencimento", 30)
             sig = st.number_input("Volatilidade (%)", 30.0) / 100.0
         
-        # Cálculo Formatado
         if st.button("Calcular Gregas"):
             bs = BlackScholes(S, K, T_dias/365, 0.13, sig, "call")
             gregas = bs.calcular_gregas()
-            
-            # Painel Bonito de Gregas
             st.divider()
             g1, g2, g3, g4 = st.columns(4)
             g1.metric("Delta (Δ)", f"{gregas['Delta']:.3f}", help="Sensibilidade ao Preço")

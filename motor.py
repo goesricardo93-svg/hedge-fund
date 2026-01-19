@@ -96,8 +96,14 @@ class MotorAnalise:
                 if vpa_c > 0: pvp = preco_atual/vpa_c
                 elif "11.SA" in ticker: pvp = 1.0
             
-            # Dados para filtros de tamanho
             market_cap = safe_float(info.get("marketCap"))
+
+            # DADOS DE DÍVIDA PARA FIIs (ALAVANCAGEM)
+            divida_total = safe_float(info.get("totalDebt"))
+            ativos_totais = safe_float(info.get("totalAssets"))
+            alavancagem = 0.0
+            if ativos_totais > 0:
+                alavancagem = divida_total / ativos_totais
 
             liq_corrente = safe_float(info.get("currentRatio"))
             cresc_receita = safe_float(info.get("revenueGrowth"))
@@ -126,29 +132,34 @@ class MotorAnalise:
             motivos = []
             alertas = []
 
-            # KILL SWITCH 1: Liquidez Geral
-            if vol_atual * preco_atual < 50000: 
-                score = 0; alertas.append("SEM LIQUIDEZ ☠️")
+            # KILL SWITCH 1: Liquidez
+            if vol_atual * preco_atual < 50000: score = 0; alertas.append("SEM LIQUIDEZ ☠️")
             else:
                 if is_fii:
-                    # KILL SWITCH 2: Trava de "Cotistas" (Via Market Cap)
-                    # FIIs com menos de 500 cotistas geralmente tem MarketCap < 10M-20M
-                    if market_cap > 0 and market_cap < 20000000: # 20 Milhões
-                         score = 0; alertas.append("MICRO FII (Risco Cotistas)")
+                    # KILL SWITCH 2: Micro FII
+                    if market_cap > 0 and market_cap < 20000000: score = 0; alertas.append("MICRO FII (Risco)")
                     else:
-                        # 1. P/VP Rígido (>1.02 penaliza)
+                        # 1. TENDÊNCIA (NOVO: Penaliza Baixa em FII)
+                        if "ALTA" in sinal_tecnico or "COMPRA" in sinal_tecnico:
+                            score += 10; motivos.append("Tend. Alta (+10)")
+                        elif "BAIXA" in sinal_tecnico or "VENDA" in sinal_tecnico:
+                            score -= 15; alertas.append("Tend. Baixa (-15)")
+
+                        # 2. ALAVANCAGEM (NOVO: Penaliza Dívida > 30%)
+                        if alavancagem > 0.30: 
+                            score -= 10; alertas.append(f"Alavancado {alavancagem*100:.0f}% (-10)")
+                        elif alavancagem > 0.01:
+                            motivos.append(f"Alav. {alavancagem*100:.0f}% (OK)")
+
+                        # 3. P/VP Rígido
                         if 0.85 <= pvp <= 1.02: score += 20; motivos.append("P/VP Justo (+20)")
                         elif pvp < 0.85: score += 15; motivos.append("Descontado (+15)")
-                        elif pvp > 1.02: score -= 20; alertas.append(f"Ágio Excessivo P/VP {pvp:.2f} (-20)") 
+                        elif pvp > 1.02: score -= 20; alertas.append(f"Ágio P/VP {pvp:.2f} (-20)")
 
-                        # 2. DY
+                        # 4. DY
                         if dy_anual > 10.0: score += 15; motivos.append(f"DY {dy_anual:.1f}% (+15)")
                         elif dy_anual > 6.0: score += 10; motivos.append("DY Aceitável (+10)")
                         elif dy_anual < 4.0: score -= 10; alertas.append("DY Baixo (-10)")
-                        
-                        # 3. Estabilidade
-                        if volatilidade < 0.20: score += 5; motivos.append("Estável (+5)")
-                        if rsi < 30: score += 10; motivos.append("Oportunidade RSI (+10)")
 
                 # AÇÕES
                 else:
@@ -163,7 +174,6 @@ class MotorAnalise:
                     if p_graham > preco_atual: score += 10; motivos.append("Desc. Graham")
                     if roe > 0.15: score += 10; motivos.append("ROE Alto")
                     if cresc_receita > 0.10: score += 10; motivos.append("Cresc. Rec.")
-                    elif cresc_receita < -0.05: score -= 5; alertas.append("Receita Caindo")
                     if divida_ebitda > 3.5: score -= 15; alertas.append("Dívida Alta")
 
             score = min(100, max(0, score))
@@ -190,10 +200,10 @@ class MotorAnalise:
                 "status_macd": "COMPRA" if macd_val > signal_val else "VENDA",
                 "vol_relativo": vol_relativo,
                 "rsi": rsi, "volatilidade": volatilidade,
-                "suporte": suporte, "resistencia": resistencia,
                 "stop_loss": stop_loss, "stop_gain": stop_gain,
                 "liq_corrente": liq_corrente, "cresc_receita": cresc_receita,
-                "roe": roe, "divida_ebitda": divida_ebitda, "margem_liq": margem_liq
+                "roe": roe, "divida_ebitda": divida_ebitda, "margem_liq": margem_liq,
+                "alavancagem": alavancagem # Novo dado
             }
 
         except Exception as e: return None
