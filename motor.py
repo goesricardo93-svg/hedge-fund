@@ -21,6 +21,8 @@ class MotorAnalise:
         try:
             if hist is None or hist.empty: return None
             
+            # Limpeza de dados para evitar MM200 zerada
+            hist = hist.ffill().bfill() # Preenche buracos
             fechamento = hist["Close"]
             volume = hist["Volume"]
             if len(fechamento) < 30: return None
@@ -33,9 +35,12 @@ class MotorAnalise:
             curta_ant, longa_ant = float(mme9.iloc[-2]), float(mme21.iloc[-2])
 
             # --- TÉCNICA (LONGO PRAZO - INSTITUCIONAL) ---
-            # MM200: A média dos últimos 200 dias úteis (aprox 1 ano)
-            mm200_series = fechamento.rolling(window=200).mean()
-            mm200 = float(mm200_series.iloc[-1]) if len(fechamento) >= 200 else 0.0
+            # Correção MM200: Usa min_periods para aceitar cálculo mesmo com pequenas falhas
+            mm200_series = fechamento.rolling(window=200, min_periods=150).mean()
+            if not mm200_series.empty and not pd.isna(mm200_series.iloc[-1]):
+                mm200 = float(mm200_series.iloc[-1])
+            else:
+                mm200 = 0.0
 
             ema12 = fechamento.ewm(span=12, adjust=False).mean()
             ema26 = fechamento.ewm(span=26, adjust=False).mean()
@@ -134,8 +139,7 @@ class MotorAnalise:
             motivos = []
             alertas = []
 
-            # 1. FILTRO DE TENDÊNCIA LONGA (MM200) - NOVO!
-            # Se não tiver histórico suficiente (ex: IPO recente), ignora.
+            # 1. FILTRO DE TENDÊNCIA LONGA (MM200)
             status_mm200 = "N/D"
             if mm200 > 0:
                 if preco_atual > mm200:
@@ -152,19 +156,15 @@ class MotorAnalise:
                     # KILL SWITCH FII
                     if market_cap > 0 and market_cap < 20000000: score = 0; alertas.append("MICRO FII (Risco)")
                     else:
-                        # TENDÊNCIA CURTA
                         if "ALTA" in sinal_tecnico: score += 10; motivos.append("Tend. Curta Alta")
                         elif "BAIXA" in sinal_tecnico: score -= 10; alertas.append("Tend. Curta Baixa")
 
-                        # ALAVANCAGEM
                         if alavancagem > 0.30: score -= 10; alertas.append(f"Alavancado {alavancagem*100:.0f}%")
 
-                        # P/VP Rígido
                         if 0.85 <= pvp <= 1.02: score += 20; motivos.append("P/VP Justo")
                         elif pvp < 0.85: score += 15; motivos.append("Descontado")
                         elif pvp > 1.02: score -= 20; alertas.append(f"Ágio P/VP {pvp:.2f}")
 
-                        # DY
                         if dy_anual > 10.0: score += 15; motivos.append("DY Excelente")
                         elif dy_anual > 6.0: score += 10; motivos.append("DY Aceitável")
                         elif dy_anual < 4.0: score -= 10; alertas.append("DY Baixo")
@@ -204,7 +204,7 @@ class MotorAnalise:
                 "sinal_tecnico": sinal_tecnico,
                 "preco_alvo_entrada": preco_alvo_entrada,
                 "mme9": curta, "mme21": longa,
-                "mm200": mm200, "status_mm200": status_mm200, # Novos Campos
+                "mm200": mm200, "status_mm200": status_mm200,
                 "macd": macd_val, "macd_signal": signal_val,
                 "status_macd": "COMPRA" if macd_val > signal_val else "VENDA",
                 "vol_relativo": vol_relativo,

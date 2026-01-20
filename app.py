@@ -2,19 +2,20 @@ import streamlit as st
 import streamlit.components.v1 as components 
 import pandas as pd
 import yfinance as yf
+import plotly.express as px
 
 # ======================================================
 # 1. CONFIGURAÇÃO
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo v106", layout="wide", page_icon="🏦")
+st.set_page_config(page_title="Hedge Fund Ricardo v108", layout="wide", page_icon="🏦")
 
 # ======================================================
 # 2. AUTO-RESET
 # ======================================================
-if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v106":
-    st.session_state.versao_sistema = "v106"
+if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v108":
+    st.session_state.versao_sistema = "v108"
     st.cache_data.clear()
-    st.toast("Atualização Institucional v106: Filtro MM200 Ativo.", icon="📈")
+    st.toast("MM200 Corrigida! Histórico Expandido (v108).", icon="✅")
 
 # ======================================================
 # 3. IMPORTAÇÃO
@@ -35,7 +36,7 @@ except Exception as e:
     st.stop()
 
 # ======================================================
-# 4. CARGA DOS 31 ATIVOS (CARTEIRA PADRÃO)
+# 4. CARTEIRA E DADOS
 # ======================================================
 def carregar_carteira_padrao():
     dados_reais = [
@@ -74,10 +75,10 @@ if "carteira_rf" not in st.session_state:
     st.session_state.carteira_rf = pd.DataFrame([["Tesouro Selic", 10000.0, "Pós-Fixado"]], columns=["Ativo", "Saldo Atual", "Tipo"])
 
 # ======================================================
-# 5. FUNÇÕES
+# 5. FUNÇÕES DE SUPORTE
 # ======================================================
 def formatar_ticker_global(t):
-    t = t.upper().strip()
+    t = str(t).upper().strip()
     if t in ["BTC", "ETH", "SOL", "USDT", "ADA", "DOGE"]: return f"{t}-USD"
     if "." in t or "-" in t or "=" in t: return t
     if any(char.isdigit() for char in t): return f"{t}.SA"
@@ -88,7 +89,8 @@ def obter_dados(ticker_raw):
     ticker = formatar_ticker_global(ticker_raw)
     try: 
         ticker_obj = yf.Ticker(ticker)
-        hist = ticker_obj.history(period="2y")
+        # AQUI ESTÁ A CORREÇÃO: 5 ANOS PARA TER DADOS SUFICIENTES DA MM200
+        hist = ticker_obj.history(period="5y") 
         if hist is None or hist.empty: return None
         try: info = ticker_obj.info
         except: info = {}
@@ -113,15 +115,41 @@ def auto_classificar():
         prog.progress((i+1)/total)
     prog.empty(); st.success("Ok!")
 
+def calcular_consolidado():
+    total_rf = st.session_state.carteira_rf["Saldo Atual"].sum()
+    df = st.session_state.carteira_acoes.copy()
+    tickers = [formatar_ticker_global(t) for t in df["Ticker"]]
+    try:
+        dados = yf.download(tickers, period="1d", progress=False)['Close'].iloc[-1]
+    except:
+        dados = pd.Series(dtype=float)
+
+    patrimonio_acoes = 0
+    lista_valores = []
+
+    for i, row in df.iterrows():
+        t_fmt = formatar_ticker_global(row["Ticker"])
+        try: preco = float(dados[t_fmt])
+        except: 
+            d_ind = obter_dados(t_fmt)
+            preco = d_ind['preco'] if d_ind else 0.0
+        
+        val_posicao = row["Qtd"] * preco
+        patrimonio_acoes += val_posicao
+        lista_valores.append(val_posicao)
+    
+    df["Valor Atual"] = lista_valores
+    return total_rf, patrimonio_acoes, df
+
 # ======================================================
 # 6. UI
 # ======================================================
-st.title("💰 Hedge Fund Ricardo v106 (Institucional)")
+st.title("💰 Hedge Fund Ricardo v108")
 
 with st.sidebar:
     st.header("Backup")
     csv = st.session_state.carteira_acoes.to_csv(index=False).encode('utf-8')
-    st.download_button("⬇️ Salvar Backup", csv, "backup_v106.csv", "text/csv")
+    st.download_button("⬇️ Salvar Backup", csv, "backup_v108.csv", "text/csv")
     up = st.file_uploader("📂 Restaurar", type=['csv'])
     if up:
         try:
@@ -137,10 +165,50 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-tabs = st.tabs(["🔎 Análise Global", "💼 Carteira", "🏢 Scanner", "🛡️ Renda Fixa", "💰 Futuro", "🦁 Fiscal", "⚡ Opções"])
+tabs = st.tabs(["📊 Dashboard CEO", "🔎 Análise Global", "💼 Carteira", "🏢 Scanner", "🛡️ Renda Fixa", "💰 Futuro", "🦁 Fiscal", "⚡ Opções"])
 
-# ABA 1: ANÁLISE GLOBAL
+# ABA 1: DASHBOARD
 with tabs[0]:
+    st.subheader("Visão Geral do Patrimônio")
+    if st.button("🔄 Atualizar (Real-Time)"):
+        st.cache_data.clear()
+        st.rerun()
+
+    tot_rf, tot_rv, df_rv = calcular_consolidado()
+    tot_geral = tot_rf + tot_rv
+    
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Patrimônio Total (AUM)", f"R$ {tot_geral:,.2f}")
+    k2.metric("Renda Variável", f"R$ {tot_rv:,.2f}", f"{(tot_rv/tot_geral)*100:.1f}%" if tot_geral>0 else "0%")
+    k3.metric("Renda Fixa / Caixa", f"R$ {tot_rf:,.2f}", f"{(tot_rf/tot_geral)*100:.1f}%" if tot_geral>0 else "0%")
+    
+    st.divider()
+
+    c_chart1, c_chart2 = st.columns(2)
+    with c_chart1:
+        st.subheader("🍕 Alocação por Setor")
+        if not df_rv.empty:
+            df_sector = df_rv.groupby("Setor")["Valor Atual"].sum().reset_index()
+            if tot_rf > 0:
+                df_sector = pd.concat([df_sector, pd.DataFrame([{"Setor": "Renda Fixa", "Valor Atual": tot_rf}])], ignore_index=True)
+            fig = px.pie(df_sector, values='Valor Atual', names='Setor', hole=0.4, title="Distribuição do Portfólio")
+            st.plotly_chart(fig, use_container_width=True)
+        else: st.info("Carteira vazia.")
+
+    with c_chart2:
+        st.subheader("🎯 Metas vs Realidade")
+        if not df_rv.empty and tot_geral > 0:
+            df_atual = df_rv.groupby("Setor")["Valor Atual"].sum().reset_index()
+            if tot_rf > 0:
+                df_atual = pd.concat([df_atual, pd.DataFrame([{"Setor": "Renda Fixa", "Valor Atual": tot_rf}])], ignore_index=True)
+            df_atual["% Atual"] = (df_atual["Valor Atual"] / tot_geral) * 100
+            
+            df_comparacao = pd.merge(st.session_state.df_metas, df_atual, on="Setor", how="outer").fillna(0)
+            fig_bar = px.bar(df_comparacao, x="Setor", y=["% Atual", "Meta (%)"], barmode="group", title="Aderência ao Mandato")
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+# ABA 2: ANÁLISE GLOBAL
+with tabs[1]:
     c_input, c_btn = st.columns([3, 1])
     with c_input:
         t_input = st.text_input("Ticker", "MXRF11", label_visibility="collapsed", placeholder="Ex: MXRF11, AAPL, BTC...")
@@ -194,10 +262,9 @@ with tabs[0]:
                     lbl_pvp = "🟢 Barato" if pvp < 1.0 else "🔴 Caro (>1.02)" if pvp > 1.02 else "⚪ Justo"
                     lbl_alav = "⚠️ Alta" if alav > 0.3 else "🟢 OK"
                     
-                    # ADICIONEI O STATUS DA MM200 AQUI TAMBÉM
                     df_setup = pd.DataFrame([
                         {"Indicador": "ANÁLISE FII", "Valor": f"{r.get('decisao_ia')}"},
-                        {"Indicador": "MM200 (Tendência Longa)", "Valor": f"{r.get('status_mm200')}"}, # NOVO
+                        {"Indicador": "MM200 (Tendência Longa)", "Valor": f"{r.get('status_mm200')}"},
                         {"Indicador": "Alavancagem (Dívida)", "Valor": f"{alav*100:.1f}% ({lbl_alav})"},
                         {"Indicador": "P/VP (Limite 1.02)", "Valor": f"{pvp:.2f}x ({lbl_pvp})"},
                         {"Indicador": "Preço Teto (Bazin)", "Valor": f"{r.get('p_bazin', 0):.2f}"},
@@ -206,10 +273,9 @@ with tabs[0]:
                 else:
                     st.subheader("🎯 Setup Operacional (Ações)")
                     sinal = r.get('sinal_tecnico', 'NEUTRO')
-                    # ADICIONEI A MM200 AQUI
                     df_setup = pd.DataFrame([
                         {"Indicador": "SINAL TÉCNICO (Curto)", "Valor": sinal},
-                        {"Indicador": "TENDÊNCIA LONGA (MM200)", "Valor": f"{r.get('status_mm200')} (R$ {r.get('mm200',0):.2f})"}, # NOVO
+                        {"Indicador": "TENDÊNCIA LONGA (MM200)", "Valor": f"{r.get('status_mm200')} (R$ {r.get('mm200',0):.2f})"},
                         {"Indicador": "Entrada Sugerida", "Valor": f"{r.get('preco_alvo_entrada', 0):.2f}"},
                         {"Indicador": "Volume Relativo", "Valor": f"{r.get('vol_relativo', 1):.1f}x"},
                         {"Indicador": "Stop Loss", "Valor": f"{r.get('stop_loss', 0):.2f}"}
@@ -225,8 +291,8 @@ with tabs[0]:
         else: 
             st.error(f"Ativo '{t_input}' não encontrado.")
 
-# ABA 2: CARTEIRA
-with tabs[1]:
+# ABA 3: CARTEIRA
+with tabs[2]:
     c1, c2 = st.columns([1, 2])
     c1.subheader("Metas %")
     st.session_state.df_metas = c1.data_editor(st.session_state.df_metas, num_rows="dynamic")
@@ -257,26 +323,26 @@ with tabs[1]:
         st.dataframe(res[res["Aporte Sugerido (R$)"] > 0.01].style.format({"Aporte Sugerido (R$)": "R$ {:.2f}"}), use_container_width=True)
 
 # DEMAIS ABAS
-with tabs[2]:
+with tabs[3]:
     st.subheader("Scanner")
     if st.button("Auto Scanner") and scanner_auto_yahoo: st.dataframe(scanner_auto_yahoo())
     up = st.file_uploader("CSV", type=["csv"])
     if up and scanner_fiis_csv: st.dataframe(scanner_fiis_csv(up))
 
-with tabs[3]:
+with tabs[4]:
     st.subheader("Renda Fixa")
     st.session_state.carteira_rf = st.data_editor(st.session_state.carteira_rf, num_rows="dynamic")
     st.metric("Total", f"R$ {st.session_state.carteira_rf['Saldo Atual'].sum():,.2f}")
 
-with tabs[4]:
+with tabs[5]:
     if st.button("Monte Carlo"):
         h = download_longo(st.session_state.carteira_acoes["Ticker"].tolist())
         if not h.empty: st.line_chart(MotorAnalise().monte_carlo_carteira(h.pct_change().dropna().mean(axis=1) if isinstance(h, pd.DataFrame) else h.pct_change().dropna(), 100000, 2000))
 
-with tabs[5]:
+with tabs[6]:
     if st.button("DARF") and calcular_darf: st.table(calcular_darf(st.session_state.carteira_acoes))
 
-with tabs[6]:
+with tabs[7]:
     st.subheader("⚡ Simulador de Opções (Black & Scholes)")
     if BlackScholes:
         c1, c2 = st.columns(2)
