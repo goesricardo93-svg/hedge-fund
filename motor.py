@@ -26,11 +26,16 @@ class MotorAnalise:
             if len(fechamento) < 30: return None
             preco_atual = float(fechamento.iloc[-1])
 
-            # --- TÉCNICA ---
+            # --- TÉCNICA (CURTO PRAZO) ---
             mme9 = fechamento.ewm(span=9, adjust=False).mean()
             mme21 = fechamento.ewm(span=21, adjust=False).mean()
             curta, longa = float(mme9.iloc[-1]), float(mme21.iloc[-1])
             curta_ant, longa_ant = float(mme9.iloc[-2]), float(mme21.iloc[-2])
+
+            # --- TÉCNICA (LONGO PRAZO - INSTITUCIONAL) ---
+            # MM200: A média dos últimos 200 dias úteis (aprox 1 ano)
+            mm200_series = fechamento.rolling(window=200).mean()
+            mm200 = float(mm200_series.iloc[-1]) if len(fechamento) >= 200 else 0.0
 
             ema12 = fechamento.ewm(span=12, adjust=False).mean()
             ema26 = fechamento.ewm(span=26, adjust=False).mean()
@@ -57,18 +62,19 @@ class MotorAnalise:
             stop_loss = suporte * 0.97
             stop_gain = resistencia * 1.02
 
+            # SINAL DE CURTO PRAZO
             sinal_tecnico = "NEUTRO"
             preco_alvo_entrada = 0.0
             if curta > longa and curta_ant <= longa_ant:
                 sinal_tecnico = "⚡ COMPRA (CRUZAMENTO)"
                 preco_alvo_entrada = preco_atual 
             elif curta > longa:
-                sinal_tecnico = "📈 TENDÊNCIA ALTA"
+                sinal_tecnico = "📈 TENDÊNCIA ALTA (CURTA)"
                 preco_alvo_entrada = curta 
             elif curta < longa and curta_ant >= longa_ant:
                 sinal_tecnico = "☠️ VENDA (CRUZAMENTO)"
             elif curta < longa:
-                sinal_tecnico = "📉 TENDÊNCIA BAIXA"
+                sinal_tecnico = "📉 TENDÊNCIA BAIXA (CURTA)"
 
             # --- DIVIDENDOS ---
             dy_anual = 0.0
@@ -97,13 +103,9 @@ class MotorAnalise:
                 elif "11.SA" in ticker: pvp = 1.0
             
             market_cap = safe_float(info.get("marketCap"))
-
-            # DADOS DE DÍVIDA PARA FIIs (ALAVANCAGEM)
             divida_total = safe_float(info.get("totalDebt"))
             ativos_totais = safe_float(info.get("totalAssets"))
-            alavancagem = 0.0
-            if ativos_totais > 0:
-                alavancagem = divida_total / ativos_totais
+            alavancagem = divida_total / ativos_totais if ativos_totais > 0 else 0.0
 
             liq_corrente = safe_float(info.get("currentRatio"))
             cresc_receita = safe_float(info.get("revenueGrowth"))
@@ -132,44 +134,50 @@ class MotorAnalise:
             motivos = []
             alertas = []
 
-            # KILL SWITCH 1: Liquidez
+            # 1. FILTRO DE TENDÊNCIA LONGA (MM200) - NOVO!
+            # Se não tiver histórico suficiente (ex: IPO recente), ignora.
+            status_mm200 = "N/D"
+            if mm200 > 0:
+                if preco_atual > mm200:
+                    score += 10; motivos.append("Acima MM200 (Bull) +10")
+                    status_mm200 = "🟢 ACIMA (Alta)"
+                else:
+                    score -= 15; alertas.append("Abaixo MM200 (Bear) -15")
+                    status_mm200 = "🔴 ABAIXO (Baixa)"
+
+            # KILL SWITCH
             if vol_atual * preco_atual < 50000: score = 0; alertas.append("SEM LIQUIDEZ ☠️")
             else:
                 if is_fii:
-                    # KILL SWITCH 2: Micro FII
+                    # KILL SWITCH FII
                     if market_cap > 0 and market_cap < 20000000: score = 0; alertas.append("MICRO FII (Risco)")
                     else:
-                        # 1. TENDÊNCIA (NOVO: Penaliza Baixa em FII)
-                        if "ALTA" in sinal_tecnico or "COMPRA" in sinal_tecnico:
-                            score += 10; motivos.append("Tend. Alta (+10)")
-                        elif "BAIXA" in sinal_tecnico or "VENDA" in sinal_tecnico:
-                            score -= 15; alertas.append("Tend. Baixa (-15)")
+                        # TENDÊNCIA CURTA
+                        if "ALTA" in sinal_tecnico: score += 10; motivos.append("Tend. Curta Alta")
+                        elif "BAIXA" in sinal_tecnico: score -= 10; alertas.append("Tend. Curta Baixa")
 
-                        # 2. ALAVANCAGEM (NOVO: Penaliza Dívida > 30%)
-                        if alavancagem > 0.30: 
-                            score -= 10; alertas.append(f"Alavancado {alavancagem*100:.0f}% (-10)")
-                        elif alavancagem > 0.01:
-                            motivos.append(f"Alav. {alavancagem*100:.0f}% (OK)")
+                        # ALAVANCAGEM
+                        if alavancagem > 0.30: score -= 10; alertas.append(f"Alavancado {alavancagem*100:.0f}%")
 
-                        # 3. P/VP Rígido
-                        if 0.85 <= pvp <= 1.02: score += 20; motivos.append("P/VP Justo (+20)")
-                        elif pvp < 0.85: score += 15; motivos.append("Descontado (+15)")
-                        elif pvp > 1.02: score -= 20; alertas.append(f"Ágio P/VP {pvp:.2f} (-20)")
+                        # P/VP Rígido
+                        if 0.85 <= pvp <= 1.02: score += 20; motivos.append("P/VP Justo")
+                        elif pvp < 0.85: score += 15; motivos.append("Descontado")
+                        elif pvp > 1.02: score -= 20; alertas.append(f"Ágio P/VP {pvp:.2f}")
 
-                        # 4. DY
-                        if dy_anual > 10.0: score += 15; motivos.append(f"DY {dy_anual:.1f}% (+15)")
-                        elif dy_anual > 6.0: score += 10; motivos.append("DY Aceitável (+10)")
-                        elif dy_anual < 4.0: score -= 10; alertas.append("DY Baixo (-10)")
+                        # DY
+                        if dy_anual > 10.0: score += 15; motivos.append("DY Excelente")
+                        elif dy_anual > 6.0: score += 10; motivos.append("DY Aceitável")
+                        elif dy_anual < 4.0: score -= 10; alertas.append("DY Baixo")
 
                 # AÇÕES
                 else:
-                    if "COMPRA" in sinal_tecnico or "ALTA" in sinal_tecnico: score += 15; motivos.append("Tend. Alta")
-                    elif "VENDA" in sinal_tecnico or "BAIXA" in sinal_tecnico: score -= 15; alertas.append("Tend. Baixa")
+                    if "COMPRA" in sinal_tecnico or "ALTA" in sinal_tecnico: score += 15; motivos.append("Tend. Curta Alta")
+                    elif "VENDA" in sinal_tecnico or "BAIXA" in sinal_tecnico: score -= 15; alertas.append("Tend. Curta Baixa")
+                    
                     if macd_val > signal_val: score += 5; motivos.append("MACD+")
                     if vol_relativo > 1.2: score += 5; motivos.append("Volume+")
                     if rsi < 30: score += 10; motivos.append("RSI Baixo")
-                    elif rsi > 70: score -= 10; alertas.append("RSI Alto")
-
+                    
                     if p_bazin > preco_atual: score += 10; motivos.append("Desc. Bazin")
                     if p_graham > preco_atual: score += 10; motivos.append("Desc. Graham")
                     if roe > 0.15: score += 10; motivos.append("ROE Alto")
@@ -196,6 +204,7 @@ class MotorAnalise:
                 "sinal_tecnico": sinal_tecnico,
                 "preco_alvo_entrada": preco_alvo_entrada,
                 "mme9": curta, "mme21": longa,
+                "mm200": mm200, "status_mm200": status_mm200, # Novos Campos
                 "macd": macd_val, "macd_signal": signal_val,
                 "status_macd": "COMPRA" if macd_val > signal_val else "VENDA",
                 "vol_relativo": vol_relativo,
@@ -203,7 +212,7 @@ class MotorAnalise:
                 "stop_loss": stop_loss, "stop_gain": stop_gain,
                 "liq_corrente": liq_corrente, "cresc_receita": cresc_receita,
                 "roe": roe, "divida_ebitda": divida_ebitda, "margem_liq": margem_liq,
-                "alavancagem": alavancagem # Novo dado
+                "alavancagem": alavancagem
             }
 
         except Exception as e: return None

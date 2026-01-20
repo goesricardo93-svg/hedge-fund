@@ -6,15 +6,15 @@ import yfinance as yf
 # ======================================================
 # 1. CONFIGURAÇÃO
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo v105", layout="wide", page_icon="💰")
+st.set_page_config(page_title="Hedge Fund Ricardo v106", layout="wide", page_icon="🏦")
 
 # ======================================================
-# 2. AUTO-RESET INTELIGENTE
+# 2. AUTO-RESET
 # ======================================================
-if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v105":
-    st.session_state.versao_sistema = "v105"
+if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v106":
+    st.session_state.versao_sistema = "v106"
     st.cache_data.clear()
-    st.toast("Sistema v105 Ativo! Lógica Cruzada FIIs + Carteira Fixa.", icon="🛡️")
+    st.toast("Atualização Institucional v106: Filtro MM200 Ativo.", icon="📈")
 
 # ======================================================
 # 3. IMPORTAÇÃO
@@ -35,7 +35,7 @@ except Exception as e:
     st.stop()
 
 # ======================================================
-# 4. CARGA DOS 31 ATIVOS (INJEÇÃO FORÇADA)
+# 4. CARGA DOS 31 ATIVOS (CARTEIRA PADRÃO)
 # ======================================================
 def carregar_carteira_padrao():
     dados_reais = [
@@ -58,7 +58,6 @@ def carregar_carteira_padrao():
     ]
     return pd.DataFrame(dados_reais, columns=["Ticker", "Qtd", "PM", "Setor"])
 
-# Verifica se não existe OU se está vazia
 if "carteira_acoes" not in st.session_state or st.session_state.carteira_acoes.empty:
     st.session_state.carteira_acoes = carregar_carteira_padrao()
 
@@ -117,13 +116,13 @@ def auto_classificar():
 # ======================================================
 # 6. UI
 # ======================================================
-st.title("💰 Hedge Fund Ricardo v105")
+st.title("💰 Hedge Fund Ricardo v106 (Institucional)")
 
 with st.sidebar:
     st.header("Backup")
     csv = st.session_state.carteira_acoes.to_csv(index=False).encode('utf-8')
-    st.download_button("⬇️ Salvar Backup", csv, "backup_v105.csv", "text/csv")
-    up = st.file_uploader("📂 Restaurar Backup", type=['csv'])
+    st.download_button("⬇️ Salvar Backup", csv, "backup_v106.csv", "text/csv")
+    up = st.file_uploader("📂 Restaurar", type=['csv'])
     if up:
         try:
             st.session_state.carteira_acoes = pd.read_csv(up)
@@ -131,11 +130,9 @@ with st.sidebar:
         except: st.error("Erro no arquivo")
     
     st.divider()
-    # BOTÃO DE EMERGÊNCIA
-    if st.button("🆘 Restaurar Carteira Padrão"): 
+    if st.button("🆘 Restaurar Padrão"): 
         st.session_state.carteira_acoes = carregar_carteira_padrao()
         st.rerun()
-
     if st.button("🧹 Limpeza de Cache"): 
         st.cache_data.clear()
         st.rerun()
@@ -191,15 +188,16 @@ with tabs[0]:
 
             with col_rob:
                 if r.get('tipo_ativo') == 'FII':
-                    st.subheader("🏗️ Setup FIIs (Rigidez: P/VP < 1.02)")
+                    st.subheader("🏗️ Setup FIIs")
                     pvp = r.get('pvp', 0)
                     alav = r.get('alavancagem', 0)
                     lbl_pvp = "🟢 Barato" if pvp < 1.0 else "🔴 Caro (>1.02)" if pvp > 1.02 else "⚪ Justo"
                     lbl_alav = "⚠️ Alta" if alav > 0.3 else "🟢 OK"
                     
+                    # ADICIONEI O STATUS DA MM200 AQUI TAMBÉM
                     df_setup = pd.DataFrame([
                         {"Indicador": "ANÁLISE FII", "Valor": f"{r.get('decisao_ia')}"},
-                        {"Indicador": "Tendência Gráfica", "Valor": f"{r.get('sinal_tecnico')}"},
+                        {"Indicador": "MM200 (Tendência Longa)", "Valor": f"{r.get('status_mm200')}"}, # NOVO
                         {"Indicador": "Alavancagem (Dívida)", "Valor": f"{alav*100:.1f}% ({lbl_alav})"},
                         {"Indicador": "P/VP (Limite 1.02)", "Valor": f"{pvp:.2f}x ({lbl_pvp})"},
                         {"Indicador": "Preço Teto (Bazin)", "Valor": f"{r.get('p_bazin', 0):.2f}"},
@@ -208,11 +206,12 @@ with tabs[0]:
                 else:
                     st.subheader("🎯 Setup Operacional (Ações)")
                     sinal = r.get('sinal_tecnico', 'NEUTRO')
+                    # ADICIONEI A MM200 AQUI
                     df_setup = pd.DataFrame([
-                        {"Indicador": "SINAL TÉCNICO", "Valor": sinal},
+                        {"Indicador": "SINAL TÉCNICO (Curto)", "Valor": sinal},
+                        {"Indicador": "TENDÊNCIA LONGA (MM200)", "Valor": f"{r.get('status_mm200')} (R$ {r.get('mm200',0):.2f})"}, # NOVO
                         {"Indicador": "Entrada Sugerida", "Valor": f"{r.get('preco_alvo_entrada', 0):.2f}"},
                         {"Indicador": "Volume Relativo", "Valor": f"{r.get('vol_relativo', 1):.1f}x"},
-                        {"Indicador": "MACD", "Valor": r.get('status_macd', '-')},
                         {"Indicador": "Stop Loss", "Valor": f"{r.get('stop_loss', 0):.2f}"}
                     ])
                     st.dataframe(df_setup, use_container_width=True, hide_index=True)
@@ -226,7 +225,7 @@ with tabs[0]:
         else: 
             st.error(f"Ativo '{t_input}' não encontrado.")
 
-# ABA 2: CARTEIRA (COM CORREÇÃO DE EXIBIÇÃO)
+# ABA 2: CARTEIRA
 with tabs[1]:
     c1, c2 = st.columns([1, 2])
     c1.subheader("Metas %")
@@ -235,7 +234,6 @@ with tabs[1]:
     c2.subheader(f"Meus Ativos ({len(st.session_state.carteira_acoes)})")
     if c2.button("Classificar (Global)"): auto_classificar()
     
-    # Exibe a carteira mesmo se estiver vazia (mas agora o auto-reset impede que esteja vazia)
     st.session_state.carteira_acoes = c2.data_editor(
         st.session_state.carteira_acoes, 
         num_rows="dynamic", 
