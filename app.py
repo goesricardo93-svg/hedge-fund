@@ -1,25 +1,24 @@
 import streamlit as st
-import streamlit.components.v1 as components 
 import pandas as pd
 import yfinance as yf
 import plotly.express as px
-import re
+import numpy as np
 
 # ======================================================
 # 1. CONFIGURAÇÃO
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo v118", layout="wide", page_icon="🏦")
+st.set_page_config(page_title="Hedge Fund Ricardo v119", layout="wide", page_icon="🏦")
 
 # ======================================================
-# 2. AUTO-RESET
+# 2. AUTO-RESET E ESTADO
 # ======================================================
-if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v118":
-    st.session_state.versao_sistema = "v118"
+if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v119":
+    st.session_state.versao_sistema = "v119"
     st.cache_data.clear()
-    st.toast("Sistema Completo v118 Carregado. Nada simplificado.", icon="💎")
+    st.toast("Sistema Restaurado: Todas as funções ativas (v119).", icon="🔥")
 
 # ======================================================
-# 3. IMPORTAÇÃO
+# 3. IMPORTAÇÃO DOS MÓDULOS (MOTOR, SCANNER, ETC)
 # ======================================================
 try:
     from motor import MotorAnalise
@@ -32,11 +31,12 @@ try:
     try: from report import gerar_pdf_carteira
     except: gerar_pdf_carteira = None
 except Exception as e:
-    st.error(f"Erro crítico na importação: {e}")
+    st.error(f"Erro crítico na importação dos módulos: {e}")
+    st.info("Verifique se os arquivos motor.py, rebalance.py, scanner.py, etc. estão na pasta.")
     st.stop()
 
 # ======================================================
-# 4. CARTEIRA PADRÃO (COMPLETA - 31 ATIVOS)
+# 4. CARTEIRA PADRÃO (OS 31 ATIVOS ORIGINAIS)
 # ======================================================
 def carregar_carteira_padrao():
     dados_reais = [
@@ -101,7 +101,7 @@ def limpar_valor_monetario(valor):
     except: return 0.0
 
 # ======================================================
-# 6. MOTOR DE IMPORTAÇÃO B3 (V115 - ROBUSTO)
+# 6. MOTOR DE IMPORTAÇÃO B3 (CORRIGIDO v115)
 # ======================================================
 def encontrar_coluna(df, palavras_chave):
     colunas_lower = [str(c).lower() for c in df.columns]
@@ -133,7 +133,8 @@ def processar_excel_b3(arquivo):
             if target_row == -1: continue
 
             df = pd.read_excel(arquivo, sheet_name=nome_aba, header=target_row)
-            df = df.loc[:, ~df.columns.duplicated()] # Dedetizador de colunas
+            # DEDETIZADOR: Remove colunas duplicadas
+            df = df.loc[:, ~df.columns.duplicated()]
 
             # Mapeamento Flexível
             col_ticker = encontrar_coluna(df, ["código", "negociação", "ticker"])
@@ -204,6 +205,7 @@ def obter_dados(ticker_raw):
     ticker = formatar_ticker_global(ticker_raw)
     try: 
         t = yf.Ticker(ticker)
+        # Importante: Mantive histórico de 5 anos para a MM200 funcionar
         h = t.history(period="5y") 
         if h.empty: return None
         return MotorAnalise().analisar(h, t.info, ticker)
@@ -250,12 +252,12 @@ def calcular_consolidado():
 # ======================================================
 # 7. UI - BARRA LATERAL
 # ======================================================
-st.title("💰 Hedge Fund Ricardo v118")
+st.title("💰 Hedge Fund Ricardo v119")
 
 with st.sidebar:
     st.header("Importação B3")
     b3_file = st.file_uploader("📂 Excel da B3", type=['xlsx', 'xls'])
-    if b3_file and st.button("Processar"):
+    if b3_file and st.button("Processar B3"):
         rv, rf, log = processar_excel_b3(b3_file)
         if rv is not None:
             st.session_state.carteira_acoes = pd.DataFrame(rv, columns=["Ticker", "Qtd", "PM", "Setor"])
@@ -280,7 +282,7 @@ with st.sidebar:
     if st.button("🧹 Limpar Cache"): st.cache_data.clear(); st.rerun()
 
 # ======================================================
-# 8. ABAS PRINCIPAIS (TODAS AS 8)
+# 8. ABAS PRINCIPAIS (TODAS RESTAURADAS)
 # ======================================================
 tabs = st.tabs(["📊 Dashboard CEO", "🔎 Análise", "💼 Carteira", "🏢 Scanner", "🛡️ Renda Fixa", "💰 Futuro", "🦁 Fiscal", "⚡ Opções"])
 
@@ -314,28 +316,108 @@ with tabs[0]:
 
 # --- ABA 1: ANÁLISE GLOBAL ---
 with tabs[1]:
-    ticker = st.text_input("Ticker", "MXRF11")
-    if st.button("Analisar"):
-        r = obter_dados(ticker)
+    c_input, c_btn = st.columns([3, 1])
+    with c_input:
+        t_input = st.text_input("Ticker", "MXRF11", label_visibility="collapsed", placeholder="Ex: MXRF11, AAPL, BTC...")
+    with c_btn:
+        btn_analisar = st.button("Analisar", use_container_width=True)
+
+    if btn_analisar:
+        t_fmt = formatar_ticker_global(t_input)
+        r = obter_dados(t_input)
+        
         if r:
-            c1, c2 = st.columns([1, 3])
-            c1.metric("Score", f"{r['score_ia']}/100")
-            c2.info(f"{r['decisao_ia']} | {r['motivos']}")
-            st.table(pd.DataFrame([r]))
-        else: st.error("Não encontrado")
+            c_score, c_veredito = st.columns([1, 3])
+            cor = "normal" if r.get('score_ia', 0) >= 60 else "inverse"
+            c_score.metric("Score IA", f"{r.get('score_ia', 0)}/100")
+            c_veredito.info(f"**Veredito:** {r.get('decisao_ia', '-')} | **Motivos:** {r.get('motivos', '-')}")
+            if r.get('alertas'): c_veredito.error(f"**Atenção:** {r['alertas']}")
+            st.divider()
+
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Preço Atual", f"{r.get('preco', 0):.2f}")
+            k2.metric("Teto (Stop Gain)", f"{r.get('stop_gain', 0):.2f}")
+            rsi_val = r.get('rsi', 50)
+            k3.metric("RSI (14)", f"{rsi_val:.0f}", delta="Sobrecomprado" if rsi_val>70 else "Sobrevendido" if rsi_val<30 else "Neutro", delta_color="inverse")
+            k4.metric("Volatilidade", f"{r.get('volatilidade', 0)*100:.1f}%")
+
+            st.divider()
+            st.subheader("💰 Raio-X de Proventos")
+            motor_div = MotorAnalise()
+            div_info = motor_div.consultar_dividendos(t_fmt)
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("Último Pago", div_info.get('ultimo_valor', '-'), div_info.get('ultimo_data', '-'))
+            d2.metric("Próximo", div_info.get('proximo_valor', '-'), div_info.get('proximo_data', '-'))
+            d3.metric("DY Anual (12m)", f"{r.get('dy_anual', 0):.2f}%")
+            d4.metric("Status", div_info.get('status', 'NEUTRO'))
+            st.divider()
+
+            col_val, col_rob = st.columns(2)
+            with col_val:
+                st.subheader("📋 Valuation")
+                st.table(pd.DataFrame({
+                    "Modelo": ["Bazin (Div.)", "Graham (Patrim.)", "Gordon (Cresc.)"],
+                    "Preço Justo": [f"{r.get('p_bazin', 0):.2f}", f"{r.get('p_graham', 0):.2f}", f"{r.get('p_gordon', 0):.2f}"]
+                }))
+
+            with col_rob:
+                if r.get('tipo_ativo') == 'FII':
+                    st.subheader("🏗️ Setup FIIs")
+                    pvp = r.get('pvp', 0)
+                    alav = r.get('alavancagem', 0)
+                    lbl_pvp = "🟢 Barato" if pvp < 1.0 else "🔴 Caro (>1.02)" if pvp > 1.02 else "⚪ Justo"
+                    lbl_alav = "⚠️ Alta" if alav > 0.3 else "🟢 OK"
+                    
+                    df_setup = pd.DataFrame([
+                        {"Indicador": "ANÁLISE FII", "Valor": f"{r.get('decisao_ia')}"},
+                        {"Indicador": "MM200 (Tendência Longa)", "Valor": f"{r.get('status_mm200')}"},
+                        {"Indicador": "Alavancagem (Dívida)", "Valor": f"{alav*100:.1f}% ({lbl_alav})"},
+                        {"Indicador": "P/VP (Limite 1.02)", "Valor": f"{pvp:.2f}x ({lbl_pvp})"},
+                        {"Indicador": "Preço Teto (Bazin)", "Valor": f"{r.get('p_bazin', 0):.2f}"},
+                    ])
+                    st.dataframe(df_setup, use_container_width=True, hide_index=True)
+                else:
+                    st.subheader("🎯 Setup Operacional (Ações)")
+                    sinal = r.get('sinal_tecnico', 'NEUTRO')
+                    df_setup = pd.DataFrame([
+                        {"Indicador": "SINAL TÉCNICO (Curto)", "Valor": sinal},
+                        {"Indicador": "TENDÊNCIA LONGA (MM200)", "Valor": f"{r.get('status_mm200')} (R$ {r.get('mm200',0):.2f})"},
+                        {"Indicador": "Entrada Sugerida", "Valor": f"{r.get('preco_alvo_entrada', 0):.2f}"},
+                        {"Indicador": "Volume Relativo", "Valor": f"{r.get('vol_relativo', 1):.1f}x"},
+                        {"Indicador": "Stop Loss", "Valor": f"{r.get('stop_loss', 0):.2f}"}
+                    ])
+                    st.dataframe(df_setup, use_container_width=True, hide_index=True)
+
+            st.subheader("Gráfico Interativo")
+            if ".SA" in t_fmt: symbol_tv = "BMFBOVESPA:" + t_fmt.replace(".SA", "")
+            elif "-USD" in t_fmt: symbol_tv = "BINANCE:" + t_fmt.replace("-USD", "USDT")
+            else: symbol_tv = "NASDAQ:" + t_fmt
+            widget = f"""<div class="tradingview-widget-container"><div id="tradingview_123"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{ "width": "100%", "height": 500, "symbol": "{symbol_tv}", "interval": "D", "timezone": "America/Sao_Paulo", "theme": "light", "style": "1", "locale": "br", "toolbar_bg": "#f1f3f6", "enable_publishing": false, "allow_symbol_change": true, "container_id": "tradingview_123" }});</script></div>"""
+            components.html(widget, height=500)
+        else: 
+            st.error(f"Ativo '{t_input}' não encontrado.")
 
 # --- ABA 2: CARTEIRA ---
 with tabs[2]:
-    st.session_state.df_metas = st.data_editor(st.session_state.df_metas, num_rows="dynamic")
-    st.subheader(f"Ativos ({len(st.session_state.carteira_acoes)})")
-    if st.button("Refinar Classificação"): auto_classificar()
-    st.session_state.carteira_acoes = st.data_editor(st.session_state.carteira_acoes, num_rows="dynamic", use_container_width=True)
+    c1, c2 = st.columns([1, 2])
+    c1.subheader("Metas %")
+    st.session_state.df_metas = c1.data_editor(st.session_state.df_metas, num_rows="dynamic")
     
-    aporte = st.number_input("Aporte", 5000.0)
-    if st.button("Rebalancear"):
+    c2.subheader(f"Meus Ativos ({len(st.session_state.carteira_acoes)})")
+    if c2.button("Auto-Classificar"): auto_classificar()
+    
+    st.session_state.carteira_acoes = c2.data_editor(
+        st.session_state.carteira_acoes, 
+        num_rows="dynamic", 
+        column_config={"Setor": st.column_config.SelectboxColumn("Setor", options=st.session_state.df_metas["Setor"].tolist())}, 
+        use_container_width=True
+    )
+    
+    aporte = c2.number_input("Aporte", 5000.0)
+    if c2.button("Calcular Rebalanceamento"):
         m = dict(zip(st.session_state.df_metas["Setor"], st.session_state.df_metas["Meta (%)"]))
         dados = []
-        bar = st.progress(0, "Calculando...")
+        bar = st.progress(0, "Calculando (Global)...")
         for i, row in st.session_state.carteira_acoes.iterrows():
             d = obter_dados(row["Ticker"])
             p = d.get("preco", 0) if d else 0
@@ -343,6 +425,7 @@ with tabs[2]:
             dados.append({**row.to_dict(), "Preço": p, "Valor_Atual": row["Qtd"]*p, "Score": s})
             bar.progress((i+1)/len(st.session_state.carteira_acoes))
         bar.empty()
+        # Chama a função real do módulo rebalance
         res = rebalancear_e_aportar(pd.DataFrame(dados), aporte, m)
         st.dataframe(res[res["Aporte Sugerido (R$)"] > 0.01].style.format({"Aporte Sugerido (R$)": "R$ {:.2f}"}), use_container_width=True)
 
@@ -351,11 +434,13 @@ with tabs[3]:
     st.subheader("🔭 Radar de Oportunidades")
     c1, c2 = st.columns(2)
     with c1:
+        st.info("Varre ~70 ações do Ibovespa/Small Caps.")
         if st.button("Escanear Ações (.SA)", use_container_width=True):
             df = executar_scanner("ACOES")
             if not df.empty: st.dataframe(df.style.background_gradient(subset=['Score'], cmap='RdYlGn'), use_container_width=True)
             else: st.warning("Nada encontrado.")
     with c2:
+        st.info("Varre os principais FIIs do IFIX.")
         if st.button("Escanear FIIs (IFIX)", use_container_width=True):
             df = executar_scanner("FIIS")
             if not df.empty: st.dataframe(df.style.background_gradient(subset=['Score'], cmap='RdYlGn'), use_container_width=True)
@@ -373,10 +458,11 @@ with tabs[5]:
         h = download_longo(st.session_state.carteira_acoes["Ticker"].tolist())
         if not h.empty: 
             retornos = h.pct_change().dropna().mean(axis=1) if isinstance(h, pd.DataFrame) else h.pct_change().dropna()
+            # Usa ultimo valor conhecido
             val_atual = st.session_state.carteira_acoes["Qtd"].mul(h.iloc[-1].values, fill_value=0).sum() if not h.empty else 100000
             sim = MotorAnalise().monte_carlo_carteira(retornos, val_atual, 2000)
             st.line_chart(sim)
-            st.success(f"Simulação concluída com base na volatilidade histórica da sua carteira.")
+            st.success(f"Simulação concluída!")
 
 # --- ABA 6: FISCAL (DARF) ---
 with tabs[6]:
