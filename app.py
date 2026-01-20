@@ -7,15 +7,15 @@ import plotly.express as px
 # ======================================================
 # 1. CONFIGURAÇÃO
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo v108", layout="wide", page_icon="🏦")
+st.set_page_config(page_title="Hedge Fund Ricardo v109", layout="wide", page_icon="🏦")
 
 # ======================================================
 # 2. AUTO-RESET
 # ======================================================
-if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v108":
-    st.session_state.versao_sistema = "v108"
+if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v109":
+    st.session_state.versao_sistema = "v109"
     st.cache_data.clear()
-    st.toast("MM200 Corrigida! Histórico Expandido (v108).", icon="✅")
+    st.toast("Módulo B3 Ativado! Importação de Excel disponível.", icon="📂")
 
 # ======================================================
 # 3. IMPORTAÇÃO
@@ -36,7 +36,7 @@ except Exception as e:
     st.stop()
 
 # ======================================================
-# 4. CARTEIRA E DADOS
+# 4. FUNÇÕES DE DADOS E IMPORTAÇÃO B3
 # ======================================================
 def carregar_carteira_padrao():
     dados_reais = [
@@ -74,9 +74,7 @@ if "df_metas" not in st.session_state:
 if "carteira_rf" not in st.session_state:
     st.session_state.carteira_rf = pd.DataFrame([["Tesouro Selic", 10000.0, "Pós-Fixado"]], columns=["Ativo", "Saldo Atual", "Tipo"])
 
-# ======================================================
-# 5. FUNÇÕES DE SUPORTE
-# ======================================================
+# --- FORMATADORES ---
 def formatar_ticker_global(t):
     t = str(t).upper().strip()
     if t in ["BTC", "ETH", "SOL", "USDT", "ADA", "DOGE"]: return f"{t}-USD"
@@ -84,12 +82,81 @@ def formatar_ticker_global(t):
     if any(char.isdigit() for char in t): return f"{t}.SA"
     return t
 
+def formatar_ticker_b3(cod):
+    # O Excel da B3 às vezes traz o código sem o .SA
+    cod = str(cod).upper().strip()
+    if cod.endswith("F"): cod = cod[:-1] # Remove Fracionário (PETR4F -> PETR4)
+    if not cod.endswith(".SA") and len(cod) <= 6: return f"{cod}.SA"
+    return cod
+
+# --- PROCESSADOR DE EXCEL B3 (NOVO!) ---
+def processar_excel_b3(arquivo):
+    try:
+        # Lê o Excel tentando encontrar o cabeçalho correto
+        # A B3 costuma colocar logotipos nas primeiras linhas, então procuramos a linha que tem "Código de Negociação"
+        df_raw = pd.read_excel(arquivo)
+        
+        # Procura a linha de cabeçalho
+        header_row = -1
+        for i, row in df_raw.iterrows():
+            row_str = row.astype(str).values
+            if "Código de Negociação" in row_str or "Produto" in row_str:
+                header_row = i + 1 # +1 pois o pandas indexa do 0 mas o header seria a próxima
+                break
+        
+        if header_row != -1:
+            # Recarrega com o cabeçalho certo
+            df = pd.read_excel(arquivo, header=header_row)
+        else:
+            df = df_raw # Tenta sorte
+
+        # Normaliza colunas
+        cols_map = {
+            "Código de Negociação": "Ticker",
+            "Produto": "Produto",
+            "Quantidade": "Qtd",
+            "Quantidade Total": "Qtd"
+        }
+        df = df.rename(columns=cols_map)
+        
+        # Filtra apenas o necessário
+        if "Ticker" not in df.columns:
+            # Tenta extrair do Produto se não tiver coluna Ticker (Raro, mas acontece)
+            return None, "Coluna 'Código de Negociação' não encontrada."
+            
+        carteira_nova = []
+        motor_aux = MotorAnalise() # Para classificar setores automaticamente
+        
+        for _, row in df.iterrows():
+            ticker_bruto = row["Ticker"]
+            qtd = row["Qtd"]
+            
+            # Pula linhas vazias ou totais
+            if pd.isna(ticker_bruto) or pd.isna(qtd): continue
+            
+            ticker_fmt = formatar_ticker_b3(ticker_bruto)
+            
+            # Tenta identificar setor na hora
+            setor = "Ações-Outros"
+            try: 
+                # Busca rápida de info (pode demorar se for muitos, então deixamos genérico e o usuário classifica depois)
+                # Otimização: Apenas inferir pelo nome
+                if "11.SA" in ticker_fmt: setor = "FIIs-Indefinido"
+            except: pass
+            
+            carteira_nova.append([ticker_fmt, float(qtd), 0.0, setor])
+            
+        return pd.DataFrame(carteira_nova, columns=["Ticker", "Qtd", "PM", "Setor"]), "Sucesso"
+
+    except Exception as e:
+        return None, f"Erro ao ler arquivo: {str(e)}"
+
+# --- DADOS ---
 @st.cache_data(ttl=300)
 def obter_dados(ticker_raw):
     ticker = formatar_ticker_global(ticker_raw)
     try: 
         ticker_obj = yf.Ticker(ticker)
-        # AQUI ESTÁ A CORREÇÃO: 5 ANOS PARA TER DADOS SUFICIENTES DA MM200
         hist = ticker_obj.history(period="5y") 
         if hist is None or hist.empty: return None
         try: info = ticker_obj.info
@@ -144,13 +211,26 @@ def calcular_consolidado():
 # ======================================================
 # 6. UI
 # ======================================================
-st.title("💰 Hedge Fund Ricardo v108")
+st.title("💰 Hedge Fund Ricardo v109")
 
 with st.sidebar:
+    st.header("Importação B3 (Novo)")
+    b3_file = st.file_uploader("📂 Arraste o Excel da B3", type=['xlsx', 'xls'])
+    if b3_file:
+        if st.button("Processar Arquivo B3"):
+            df_b3, msg = processar_excel_b3(b3_file)
+            if df_b3 is not None and not df_b3.empty:
+                st.session_state.carteira_acoes = df_b3
+                st.success(f"Sucesso! {len(df_b3)} ativos carregados da B3.")
+                st.rerun()
+            else:
+                st.error(f"Erro: {msg}")
+
+    st.divider()
     st.header("Backup")
     csv = st.session_state.carteira_acoes.to_csv(index=False).encode('utf-8')
-    st.download_button("⬇️ Salvar Backup", csv, "backup_v108.csv", "text/csv")
-    up = st.file_uploader("📂 Restaurar", type=['csv'])
+    st.download_button("⬇️ Salvar Backup", csv, "backup_v109.csv", "text/csv")
+    up = st.file_uploader("📂 Restaurar Backup", type=['csv'])
     if up:
         try:
             st.session_state.carteira_acoes = pd.read_csv(up)
