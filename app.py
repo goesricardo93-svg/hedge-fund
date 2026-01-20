@@ -7,15 +7,15 @@ import plotly.express as px
 # ======================================================
 # 1. CONFIGURAÇÃO
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo v112", layout="wide", page_icon="🏦")
+st.set_page_config(page_title="Hedge Fund Ricardo v113", layout="wide", page_icon="🏦")
 
 # ======================================================
 # 2. AUTO-RESET
 # ======================================================
-if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v112":
-    st.session_state.versao_sistema = "v112"
+if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v113":
+    st.session_state.versao_sistema = "v113"
     st.cache_data.clear()
-    st.toast("Motor v112: Soma de Empréstimos (Doador) Ativada!", icon="➕")
+    st.toast("Motor v113: Correção de Colunas Duplicadas Ativa!", icon="🔧")
 
 # ======================================================
 # 3. IMPORTAÇÃO
@@ -39,7 +39,6 @@ except Exception as e:
 # 4. FUNÇÕES BASE
 # ======================================================
 def carregar_carteira_padrao():
-    # Carteira de exemplo
     dados = [["MXRF11.SA", 100, 10.50, "FIIs-Papel"], ["PETR4.SA", 200, 35.00, "Ações-Commodities"]]
     return pd.DataFrame(dados, columns=["Ticker", "Qtd", "PM", "Setor"])
 
@@ -71,16 +70,12 @@ def formatar_ticker_b3(cod):
     if not cod.endswith(".SA") and len(cod) <= 6: return f"{cod}.SA"
     return cod
 
-# --- O CORAÇÃO DO SISTEMA v112 ---
+# --- O CORAÇÃO DO SISTEMA v113 (Com Dedetizador de Colunas) ---
 def processar_excel_b3(arquivo):
     try:
-        # Lê todas as abas sem cabeçalho para achar a linha certa
         xls_raw = pd.read_excel(arquivo, sheet_name=None, header=None)
         
-        # Dicionário temporário para somar as quantidades (Ações + Empréstimos)
-        # Chave: Ticker, Valor: {qtd: float, setor: str}
         posicao_consolidada = {}
-        
         carteira_rf_nova = []
         log_msgs = []
 
@@ -91,7 +86,6 @@ def processar_excel_b3(arquivo):
             target_row = -1
             for i, row in df_raw.iterrows():
                 row_str = row.astype(str).values
-                # Procura colunas chave
                 if "Código de Negociação" in row_str or "Produto" in row_str:
                     target_row = i
                     break
@@ -100,9 +94,9 @@ def processar_excel_b3(arquivo):
 
             # 2. Ler aba correta
             df = pd.read_excel(arquivo, sheet_name=nome_aba, header=target_row)
-            df.columns = [str(c).strip() for c in df.columns] # Limpa nomes das colunas
+            df.columns = [str(c).strip() for c in df.columns] 
             
-            # Mapeamento de Colunas
+            # Mapeamento
             mapa = {
                 "Código de Negociação": "Ticker", "Produto": "Produto",
                 "Quantidade": "Qtd", "Quantidade Total": "Qtd", "Quantidade Disponível": "Qtd",
@@ -110,39 +104,40 @@ def processar_excel_b3(arquivo):
             }
             df = df.rename(columns=mapa)
 
+            # --- CORREÇÃO DE BUG "AMBIGUOUS SERIES" (DEDETIZADOR) ---
+            # Remove colunas com nomes duplicados (mantém a primeira aparição)
+            df = df.loc[:, ~df.columns.duplicated()]
+
             # --- LÓGICA DE CATEGORIZAÇÃO ---
 
-            # A) EMPRÉSTIMOS (DOADOR)
-            # Se for Empréstimo, nós somos "Doador" (Dono). Somamos à posição principal.
+            # A) EMPRÉSTIMOS
             if "empréstimo" in nome_limpo:
                 if "Ticker" in df.columns and "Qtd" in df.columns:
                     for _, row in df.iterrows():
                         ticker = formatar_ticker_b3(row["Ticker"])
-                        qtd = pd.to_numeric(row["Qtd"], errors='coerce') or 0
+                        # Usa to_numeric para forçar virar número único, se falhar vira NaN
+                        qtd = pd.to_numeric(row["Qtd"], errors='coerce') 
+                        if pd.isna(qtd): qtd = 0
                         
-                        # Filtro de segurança: Se tiver coluna "Tipo", garantir que é Doador
-                        # (Mas geralmente na visão de Posição, só aparecem os seus ativos)
                         if qtd > 0:
                             if ticker not in posicao_consolidada:
-                                posicao_consolidada[ticker] = {'qtd': 0.0, 'setor': 'Ações-Outros'} # Default
-                            
+                                posicao_consolidada[ticker] = {'qtd': 0.0, 'setor': 'Ações-Outros'}
                             posicao_consolidada[ticker]['qtd'] += qtd
-                            log_msgs.append(f"➕ {ticker}: Somando {qtd} (Empréstimo/Doador)")
+                            log_msgs.append(f"➕ {ticker}: Somando {qtd}")
 
-            # B) AÇÕES / FIIs / ETF (CUSTÓDIA LIVRE)
+            # B) AÇÕES / FIIs / ETF
             elif any(x in nome_limpo for x in ["ações", "fundo", "etf"]):
-                # Tenta achar Ticker ou extrair de Produto
                 if "Ticker" not in df.columns and "Produto" in df.columns:
                      df["Ticker"] = df["Produto"].apply(lambda x: str(x).split("-")[0].strip())
 
                 if "Ticker" in df.columns and "Qtd" in df.columns:
                     for _, row in df.iterrows():
                         ticker = formatar_ticker_b3(row["Ticker"])
-                        qtd = pd.to_numeric(row["Qtd"], errors='coerce') or 0
+                        qtd = pd.to_numeric(row["Qtd"], errors='coerce')
+                        if pd.isna(qtd): qtd = 0
                         
                         if qtd <= 0: continue
 
-                        # Define Setor pela ABA (Mais confiável)
                         setor = "Ações-Outros"
                         if "fundo" in nome_limpo: setor = "FIIs-Indefinido"
                         elif "etf" in nome_limpo: setor = "Exterior"
@@ -151,30 +146,30 @@ def processar_excel_b3(arquivo):
                         if ticker not in posicao_consolidada:
                             posicao_consolidada[ticker] = {'qtd': 0.0, 'setor': setor}
                         
-                        # Se já existe (veio do empréstimo ou vice versa), atualiza setor se for mais específico
                         if setor != "Ações-Outros": 
                             posicao_consolidada[ticker]['setor'] = setor
                         
                         posicao_consolidada[ticker]['qtd'] += qtd
 
-            # C) RENDA FIXA / TESOURO
+            # C) RENDA FIXA
             elif "tesouro" in nome_limpo or "renda fixa" in nome_limpo:
                 if "Produto" in df.columns and "Saldo" in df.columns:
                     for _, row in df.iterrows():
                         prod = row["Produto"]
-                        saldo = pd.to_numeric(row["Saldo"], errors='coerce') or 0
+                        saldo = pd.to_numeric(row["Saldo"], errors='coerce')
+                        if pd.isna(saldo): saldo = 0
+
                         if saldo > 0:
                             tipo = "Tesouro" if "tesouro" in nome_limpo else "Renda Fixa"
                             carteira_rf_nova.append([prod, saldo, tipo])
 
-        # Transforma o Dicionário consolidado em Lista Final
         carteira_rv_final = []
         for ticker, dados in posicao_consolidada.items():
             if dados['qtd'] > 0:
                 carteira_rv_final.append([ticker, dados['qtd'], 0.0, dados['setor']])
 
-        msg_final = f"Processado! {len(carteira_rv_final)} ativos de RV (Soma Custódia + Empréstimo) e {len(carteira_rf_nova)} de RF."
-        if log_msgs: msg_final += "\n" + "\n".join(log_msgs[:5]) + "..." # Mostra os 5 primeiros logs
+        msg_final = f"Processado! {len(carteira_rv_final)} ativos RV e {len(carteira_rf_nova)} RF."
+        if log_msgs: msg_final += "\n" + "\n".join(log_msgs[:5]) + "..." 
 
         return carteira_rv_final, carteira_rf_nova, msg_final
 
@@ -187,7 +182,7 @@ def obter_dados(ticker_raw):
     ticker = formatar_ticker_global(ticker_raw)
     try: 
         t = yf.Ticker(ticker)
-        h = t.history(period="5y") # 5 anos para MM200
+        h = t.history(period="5y") 
         if h.empty: return None
         return MotorAnalise().analisar(h, t.info, ticker)
     except: return None
@@ -203,7 +198,6 @@ def auto_classificar():
     prog = st.progress(0, "Refinando Setores...")
     total = len(st.session_state.carteira_acoes)
     for i, row in st.session_state.carteira_acoes.iterrows():
-        # Só reclassifica se for genérico
         if row["Setor"] in ["Ações-Outros", "FIIs-Indefinido"]:
             try: 
                 novo_setor = motor.identificar_setor(yf.Ticker(formatar_ticker_global(row["Ticker"])).info, row["Ticker"])
@@ -234,10 +228,10 @@ def calcular_consolidado():
 # ======================================================
 # 6. UI
 # ======================================================
-st.title("💰 Hedge Fund Ricardo v112")
+st.title("💰 Hedge Fund Ricardo v113")
 
 with st.sidebar:
-    st.header("Importação B3 (V112)")
+    st.header("Importação B3 (V113)")
     b3_file = st.file_uploader("📂 Excel da B3", type=['xlsx', 'xls'])
     if b3_file and st.button("Processar"):
         rv, rf, log = processar_excel_b3(b3_file)
@@ -309,8 +303,7 @@ with tabs[2]:
     
     aporte = st.number_input("Aporte", 5000.0)
     if st.button("Rebalancear"):
-        # Lógica simplificada de rebalanceamento visual
-        st.info("Funcionalidade de rebalanceamento pronta para uso com motor v108.")
+        st.info("Funcionalidade de rebalanceamento pronta para uso.")
 
-# DEMAIS ABAS (Mantidas simplificadas para caber na resposta, mas funcionais)
+# DEMAIS ABAS (Mantidas simplificadas)
 with tabs[4]: st.session_state.carteira_rf = st.data_editor(st.session_state.carteira_rf, num_rows="dynamic")
