@@ -3,19 +3,20 @@ import streamlit.components.v1 as components
 import pandas as pd
 import yfinance as yf
 import plotly.express as px
+import io
 
 # ======================================================
 # 1. CONFIGURAÇÃO
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo v109", layout="wide", page_icon="🏦")
+st.set_page_config(page_title="Hedge Fund Ricardo v110", layout="wide", page_icon="🏦")
 
 # ======================================================
 # 2. AUTO-RESET
 # ======================================================
-if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v109":
-    st.session_state.versao_sistema = "v109"
+if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v110":
+    st.session_state.versao_sistema = "v110"
     st.cache_data.clear()
-    st.toast("Módulo B3 Ativado! Importação de Excel disponível.", icon="📂")
+    st.toast("Motor B3 Multi-Aba v110 Ativado!", icon="📂")
 
 # ======================================================
 # 3. IMPORTAÇÃO
@@ -83,73 +84,89 @@ def formatar_ticker_global(t):
     return t
 
 def formatar_ticker_b3(cod):
-    # O Excel da B3 às vezes traz o código sem o .SA
     cod = str(cod).upper().strip()
-    if cod.endswith("F"): cod = cod[:-1] # Remove Fracionário (PETR4F -> PETR4)
+    if cod.endswith("F"): cod = cod[:-1]
     if not cod.endswith(".SA") and len(cod) <= 6: return f"{cod}.SA"
     return cod
 
-# --- PROCESSADOR DE EXCEL B3 (NOVO!) ---
+# --- PROCESSADOR INTELIGENTE (MULTI-ABA) ---
 def processar_excel_b3(arquivo):
     try:
-        # Lê o Excel tentando encontrar o cabeçalho correto
-        # A B3 costuma colocar logotipos nas primeiras linhas, então procuramos a linha que tem "Código de Negociação"
-        df_raw = pd.read_excel(arquivo)
+        # Lê TODAS as abas do Excel (retorna um dicionário de DataFrames)
+        xls = pd.read_excel(arquivo, sheet_name=None)
         
-        # Procura a linha de cabeçalho
-        header_row = -1
-        for i, row in df_raw.iterrows():
-            row_str = row.astype(str).values
-            if "Código de Negociação" in row_str or "Produto" in row_str:
-                header_row = i + 1 # +1 pois o pandas indexa do 0 mas o header seria a próxima
-                break
+        carteira_rv_nova = [] # Para Ações e FIIs
+        carteira_rf_nova = [] # Para Tesouro e Renda Fixa
         
-        if header_row != -1:
-            # Recarrega com o cabeçalho certo
-            df = pd.read_excel(arquivo, header=header_row)
-        else:
-            df = df_raw # Tenta sorte
+        log_msgs = []
 
-        # Normaliza colunas
-        cols_map = {
-            "Código de Negociação": "Ticker",
-            "Produto": "Produto",
-            "Quantidade": "Qtd",
-            "Quantidade Total": "Qtd"
-        }
-        df = df.rename(columns=cols_map)
-        
-        # Filtra apenas o necessário
-        if "Ticker" not in df.columns:
-            # Tenta extrair do Produto se não tiver coluna Ticker (Raro, mas acontece)
-            return None, "Coluna 'Código de Negociação' não encontrada."
+        # Itera sobre cada aba (Ex: "Ações", "Tesouro Direto", etc.)
+        for nome_aba, df_aba in xls.items():
+            nome_limpo = nome_aba.lower()
             
-        carteira_nova = []
-        motor_aux = MotorAnalise() # Para classificar setores automaticamente
-        
-        for _, row in df.iterrows():
-            ticker_bruto = row["Ticker"]
-            qtd = row["Qtd"]
+            # Identifica o cabeçalho correto em cada aba
+            header_row = -1
+            for i, row in df_aba.iterrows():
+                row_str = row.astype(str).values
+                if "Código de Negociação" in row_str or "Produto" in row_str:
+                    header_row = i + 1
+                    break
             
-            # Pula linhas vazias ou totais
-            if pd.isna(ticker_bruto) or pd.isna(qtd): continue
+            if header_row != -1:
+                df = pd.read_excel(arquivo, sheet_name=nome_aba, header=header_row)
+            else:
+                df = df_aba
+
+            # Normaliza colunas
+            cols_map = {
+                "Código de Negociação": "Ticker", "Produto": "Produto",
+                "Quantidade": "Qtd", "Quantidade Total": "Qtd",
+                "Valor Atual": "Saldo Atual", "Saldo Líquido": "Saldo Atual" # Para RF
+            }
+            df = df.rename(columns=cols_map)
+
+            # --- LÓGICA DE SEPARAÇÃO ---
             
-            ticker_fmt = formatar_ticker_b3(ticker_bruto)
-            
-            # Tenta identificar setor na hora
-            setor = "Ações-Outros"
-            try: 
-                # Busca rápida de info (pode demorar se for muitos, então deixamos genérico e o usuário classifica depois)
-                # Otimização: Apenas inferir pelo nome
-                if "11.SA" in ticker_fmt: setor = "FIIs-Indefinido"
-            except: pass
-            
-            carteira_nova.append([ticker_fmt, float(qtd), 0.0, setor])
-            
-        return pd.DataFrame(carteira_nova, columns=["Ticker", "Qtd", "PM", "Setor"]), "Sucesso"
+            # 1. RENDA FIXA / TESOURO
+            if "tesouro" in nome_limpo or "renda fixa" in nome_limpo:
+                if "Produto" in df.columns and "Saldo Atual" in df.columns:
+                    for _, row in df.iterrows():
+                        prod = row["Produto"]
+                        saldo = row["Saldo Atual"]
+                        if pd.notna(prod) and pd.notna(saldo):
+                            tipo = "Tesouro" if "tesouro" in nome_limpo else "CDB/LCI/LCA"
+                            carteira_rf_nova.append([prod, float(saldo), tipo])
+                    log_msgs.append(f"✅ {len(df)} itens de {nome_aba} importados para Renda Fixa.")
+
+            # 2. RENDA VARIÁVEL (AÇÕES, FIIs, ETF)
+            elif "ações" in nome_limpo or "fundo" in nome_limpo or "etf" in nome_limpo:
+                if "Ticker" not in df.columns and "Produto" in df.columns:
+                     # Fallback: Se não tem ticker, tenta usar a coluna Produto como Ticker (comum em alguns layouts)
+                     df["Ticker"] = df["Produto"].apply(lambda x: x.split("-")[0].strip() if "-" in str(x) else str(x))
+
+                if "Ticker" in df.columns and "Qtd" in df.columns:
+                    for _, row in df.iterrows():
+                        ticker_bruto = row["Ticker"]
+                        qtd = row["Qtd"]
+                        
+                        if pd.isna(ticker_bruto) or pd.isna(qtd): continue
+                        
+                        ticker_fmt = formatar_ticker_b3(ticker_bruto)
+                        
+                        # Inferência de Setor Baseada na Aba
+                        setor = "Ações-Outros"
+                        if "fundo" in nome_limpo or "11.SA" in ticker_fmt:
+                            setor = "FIIs-Indefinido"
+                        elif "etf" in nome_limpo:
+                            setor = "Exterior" if "IVVB" in ticker_fmt or "SPXI" in ticker_fmt else "Ações-Outros"
+                        
+                        carteira_rv_nova.append([ticker_fmt, float(qtd), 0.0, setor])
+                    log_msgs.append(f"✅ {len(df)} itens de {nome_aba} importados para Carteira.")
+
+        return carteira_rv_nova, carteira_rf_nova, "\n".join(log_msgs)
 
     except Exception as e:
-        return None, f"Erro ao ler arquivo: {str(e)}"
+        return None, None, f"Erro crítico na leitura: {str(e)}"
 
 # --- DADOS ---
 @st.cache_data(ttl=300)
@@ -211,25 +228,34 @@ def calcular_consolidado():
 # ======================================================
 # 6. UI
 # ======================================================
-st.title("💰 Hedge Fund Ricardo v109")
+st.title("💰 Hedge Fund Ricardo v110")
 
 with st.sidebar:
-    st.header("Importação B3 (Novo)")
+    st.header("Importação B3 (Smart)")
     b3_file = st.file_uploader("📂 Arraste o Excel da B3", type=['xlsx', 'xls'])
     if b3_file:
         if st.button("Processar Arquivo B3"):
-            df_b3, msg = processar_excel_b3(b3_file)
-            if df_b3 is not None and not df_b3.empty:
-                st.session_state.carteira_acoes = df_b3
-                st.success(f"Sucesso! {len(df_b3)} ativos carregados da B3.")
+            lista_rv, lista_rf, log = processar_excel_b3(b3_file)
+            
+            if lista_rv is not None:
+                # Atualiza Carteira de Ações
+                if len(lista_rv) > 0:
+                    st.session_state.carteira_acoes = pd.DataFrame(lista_rv, columns=["Ticker", "Qtd", "PM", "Setor"])
+                
+                # Atualiza Carteira de Renda Fixa (Adiciona aos existentes ou substitui? Aqui substitui para manter sincronia)
+                if len(lista_rf) > 0:
+                    st.session_state.carteira_rf = pd.DataFrame(lista_rf, columns=["Ativo", "Saldo Atual", "Tipo"])
+                
+                st.success("Importação Concluída!")
+                st.info(log)
                 st.rerun()
             else:
-                st.error(f"Erro: {msg}")
+                st.error(f"Erro: {log}")
 
     st.divider()
     st.header("Backup")
     csv = st.session_state.carteira_acoes.to_csv(index=False).encode('utf-8')
-    st.download_button("⬇️ Salvar Backup", csv, "backup_v109.csv", "text/csv")
+    st.download_button("⬇️ Salvar Backup", csv, "backup_v110.csv", "text/csv")
     up = st.file_uploader("📂 Restaurar Backup", type=['csv'])
     if up:
         try:
@@ -361,15 +387,6 @@ with tabs[1]:
                         {"Indicador": "Stop Loss", "Valor": f"{r.get('stop_loss', 0):.2f}"}
                     ])
                     st.dataframe(df_setup, use_container_width=True, hide_index=True)
-
-            st.subheader("Gráfico Interativo")
-            if ".SA" in t_fmt: symbol_tv = "BMFBOVESPA:" + t_fmt.replace(".SA", "")
-            elif "-USD" in t_fmt: symbol_tv = "BINANCE:" + t_fmt.replace("-USD", "USDT")
-            else: symbol_tv = "NASDAQ:" + t_fmt
-            widget = f"""<div class="tradingview-widget-container"><div id="tradingview_123"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{ "width": "100%", "height": 500, "symbol": "{symbol_tv}", "interval": "D", "timezone": "America/Sao_Paulo", "theme": "light", "style": "1", "locale": "br", "toolbar_bg": "#f1f3f6", "enable_publishing": false, "allow_symbol_change": true, "container_id": "tradingview_123" }});</script></div>"""
-            components.html(widget, height=500)
-        else: 
-            st.error(f"Ativo '{t_input}' não encontrado.")
 
 # ABA 3: CARTEIRA
 with tabs[2]:
