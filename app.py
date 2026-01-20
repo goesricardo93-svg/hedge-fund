@@ -1,24 +1,26 @@
 import streamlit as st
+import streamlit.components.v1 as components  # <--- Faltava esta linha!
 import pandas as pd
 import yfinance as yf
 import plotly.express as px
 import numpy as np
+import re
 
 # ======================================================
 # 1. CONFIGURAÇÃO
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo v119", layout="wide", page_icon="🏦")
+st.set_page_config(page_title="Hedge Fund Ricardo v120", layout="wide", page_icon="🏦")
 
 # ======================================================
 # 2. AUTO-RESET E ESTADO
 # ======================================================
-if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v119":
-    st.session_state.versao_sistema = "v119"
+if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v120":
+    st.session_state.versao_sistema = "v120"
     st.cache_data.clear()
-    st.toast("Sistema Restaurado: Todas as funções ativas (v119).", icon="🔥")
+    st.toast("Sistema v120: Gráficos e Imports Corrigidos!", icon="✅")
 
 # ======================================================
-# 3. IMPORTAÇÃO DOS MÓDULOS (MOTOR, SCANNER, ETC)
+# 3. IMPORTAÇÃO DOS MÓDULOS
 # ======================================================
 try:
     from motor import MotorAnalise
@@ -32,11 +34,11 @@ try:
     except: gerar_pdf_carteira = None
 except Exception as e:
     st.error(f"Erro crítico na importação dos módulos: {e}")
-    st.info("Verifique se os arquivos motor.py, rebalance.py, scanner.py, etc. estão na pasta.")
+    st.info("Verifique se os arquivos motor.py, rebalance.py, scanner.py estão na pasta.")
     st.stop()
 
 # ======================================================
-# 4. CARTEIRA PADRÃO (OS 31 ATIVOS ORIGINAIS)
+# 4. CARTEIRA PADRÃO
 # ======================================================
 def carregar_carteira_padrao():
     dados_reais = [
@@ -101,7 +103,7 @@ def limpar_valor_monetario(valor):
     except: return 0.0
 
 # ======================================================
-# 6. MOTOR DE IMPORTAÇÃO B3 (CORRIGIDO v115)
+# 6. MOTOR DE IMPORTAÇÃO B3 (V115)
 # ======================================================
 def encontrar_coluna(df, palavras_chave):
     colunas_lower = [str(c).lower() for c in df.columns]
@@ -133,7 +135,6 @@ def processar_excel_b3(arquivo):
             if target_row == -1: continue
 
             df = pd.read_excel(arquivo, sheet_name=nome_aba, header=target_row)
-            # DEDETIZADOR: Remove colunas duplicadas
             df = df.loc[:, ~df.columns.duplicated()]
 
             # Mapeamento Flexível
@@ -143,7 +144,6 @@ def processar_excel_b3(arquivo):
             col_saldo = encontrar_coluna(df, ["valor líquido", "valor atual", "saldo", "valor total", "bruto"])
 
             # --- PROCESSAMENTO ---
-
             # CASO A: AÇÕES / FIIs / ETF / EMPRÉSTIMOS
             if any(x in nome_limpo for x in ["empréstimo", "ações", "fundo", "etf"]):
                 col_ref = col_ticker if col_ticker else col_produto
@@ -205,7 +205,6 @@ def obter_dados(ticker_raw):
     ticker = formatar_ticker_global(ticker_raw)
     try: 
         t = yf.Ticker(ticker)
-        # Importante: Mantive histórico de 5 anos para a MM200 funcionar
         h = t.history(period="5y") 
         if h.empty: return None
         return MotorAnalise().analisar(h, t.info, ticker)
@@ -252,7 +251,7 @@ def calcular_consolidado():
 # ======================================================
 # 7. UI - BARRA LATERAL
 # ======================================================
-st.title("💰 Hedge Fund Ricardo v119")
+st.title("💰 Hedge Fund Ricardo v120")
 
 with st.sidebar:
     st.header("Importação B3")
@@ -282,7 +281,7 @@ with st.sidebar:
     if st.button("🧹 Limpar Cache"): st.cache_data.clear(); st.rerun()
 
 # ======================================================
-# 8. ABAS PRINCIPAIS (TODAS RESTAURADAS)
+# 8. ABAS PRINCIPAIS (FULL)
 # ======================================================
 tabs = st.tabs(["📊 Dashboard CEO", "🔎 Análise", "💼 Carteira", "🏢 Scanner", "🛡️ Renda Fixa", "💰 Futuro", "🦁 Fiscal", "⚡ Opções"])
 
@@ -425,7 +424,6 @@ with tabs[2]:
             dados.append({**row.to_dict(), "Preço": p, "Valor_Atual": row["Qtd"]*p, "Score": s})
             bar.progress((i+1)/len(st.session_state.carteira_acoes))
         bar.empty()
-        # Chama a função real do módulo rebalance
         res = rebalancear_e_aportar(pd.DataFrame(dados), aporte, m)
         st.dataframe(res[res["Aporte Sugerido (R$)"] > 0.01].style.format({"Aporte Sugerido (R$)": "R$ {:.2f}"}), use_container_width=True)
 
@@ -458,7 +456,6 @@ with tabs[5]:
         h = download_longo(st.session_state.carteira_acoes["Ticker"].tolist())
         if not h.empty: 
             retornos = h.pct_change().dropna().mean(axis=1) if isinstance(h, pd.DataFrame) else h.pct_change().dropna()
-            # Usa ultimo valor conhecido
             val_atual = st.session_state.carteira_acoes["Qtd"].mul(h.iloc[-1].values, fill_value=0).sum() if not h.empty else 100000
             sim = MotorAnalise().monte_carlo_carteira(retornos, val_atual, 2000)
             st.line_chart(sim)
