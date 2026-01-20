@@ -1,99 +1,101 @@
 import pandas as pd
 import yfinance as yf
+from motor import MotorAnalise
+import streamlit as st
 
-# ======================================================
-# MODO 1: VIA ARQUIVO (ANÁLISE PROFUNDA RESTAURADA)
-# ======================================================
-def scanner_fiis_csv(uploaded_file):
-    try:
-        # Lê o CSV padrão do StatusInvest (separador ponto-e-vírgula, encoding latin-1)
-        df = pd.read_csv(uploaded_file, sep=';', encoding='latin-1', thousands='.', decimal=',')
-        
-        # Limpa espaços nos nomes das colunas
-        df.columns = [c.strip() for c in df.columns]
-        
-        # --- APLICAÇÃO DOS FILTROS (AQUI ESTAVA O ERRO) ---
-        
-        # 1. Filtro de Liquidez (FIIs negociáveis)
-        if 'Liquidez Media Diaria' in df.columns:
-            df = df[df['Liquidez Media Diaria'] > 500000] 
-            
-        # 2. Filtro de Dividendos (Evita DY falso/gigante ou zerado)
-        if 'DY (12M) Media' in df.columns:
-            df = df[(df['DY (12M) Media'] > 6.0) & (df['DY (12M) Media'] < 20.0)]
-            
-        # 3. Filtro de Preço Justo (P/VP)
-        if 'P/VP' in df.columns:
-            df = df[(df['P/VP'] > 0.80) & (df['P/VP'] < 1.20)]
-            
-        # 4. Filtro de Vacância (Segurança para Tijolo)
-        # Verifica se a coluna existe antes de filtrar
-        if 'Vacancia Financeira' in df.columns:
-             df = df[df['Vacancia Financeira'] < 10.0]
-        
-        # Seleção e Ordenação das Colunas Finais
-        cols_desejadas = ['TICKER', 'PRECO', 'DY (12M) Media', 'P/VP', 'Liquidez Media Diaria', 'SEGMENTO', 'Vacancia Financeira']
-        
-        # Garante que só pegamos colunas que realmente existem no arquivo
-        cols_finais = [c for c in cols_desejadas if c in df.columns]
-        
-        # Retorna o Top 20 ordenado por DY
-        return df[cols_finais].sort_values(by='DY (12M) Media', ascending=False).head(20)
-        
-    except Exception as e:
-        return pd.DataFrame([{"Erro na Leitura": f"Verifique se o CSV é do StatusInvest. Detalhe: {str(e)}"}])
+# Lista de Ativos Líquidos para Monitorar (IBOV + SMLL)
+TICKERS_ACOES = [
+    "VALE3.SA", "PETR4.SA", "ITUB4.SA", "BBDC4.SA", "BBAS3.SA", "PETR3.SA", "ELET3.SA", "RENT3.SA",
+    "WEGE3.SA", "ABEV3.SA", "SUZB3.SA", "BPAC11.SA", "EQTL3.SA", "PRIO3.SA", "RADL3.SA", "RDOR3.SA",
+    "JBSS3.SA", "LREN3.SA", "GGBR4.SA", "RAIL3.SA", "VIVT3.SA", "ENEV3.SA", "BBSE3.SA", "HYPE3.SA",
+    "CMIG4.SA", "SBSP3.SA", "CPLE6.SA", "CSAN3.SA", "UGPA3.SA", "TIMS3.SA", "TOTS3.SA", "EMBR3.SA",
+    "VIBRA3.SA", "CCRO3.SA", "EGIE3.SA", "CSNA3.SA", "BRFS3.SA", "MULT3.SA", "GOAU4.SA", "TAEE11.SA",
+    "KLBN11.SA", "ALOS3.SA", "FLRY3.SA", "EZTC3.SA", "MRVE3.SA", "CVCB3.SA", "GOLL4.SA", "AZUL4.SA",
+    "MGLU3.SA", "VIIA3.SA", "POSI3.SA", "INTB3.SA", "TRPL4.SA", "SAPR11.SA", "SANB11.SA", "CXSE3.SA",
+    "PSSA3.SA", "IRBR3.SA", "SLCE3.SA", "SMTO3.SA", "ARZZ3.SA", "SOMA3.SA", "PETZ3.SA"
+]
 
-# ======================================================
-# MODO 2: AUTOMÁTICO (COM INTEGRAÇÃO AO MOTOR)
-# ======================================================
-def scanner_auto_yahoo():
-    try: 
-        from motor import MotorAnalise
-    except ImportError: 
-        return pd.DataFrame([{"Erro": "Arquivo motor.py não encontrado."}])
-    
+TICKERS_FIIS = [
+    "MXRF11.SA", "HGLG11.SA", "XPML11.SA", "KNRI11.SA", "KNCR11.SA", "HGRU11.SA", "IRDM11.SA", "XPLG11.SA",
+    "VISC11.SA", "BRCO11.SA", "BTLG11.SA", "CPTS11.SA", "HGBS11.SA", "MALL11.SA", "VILG11.SA", "LVBI11.SA",
+    "TGAR11.SA", "KNSC11.SA", "JSRE11.SA", "HGRE11.SA", "RZTR11.SA", "RBRR11.SA", "HECT11.SA", "DEVA11.SA",
+    "RECR11.SA", "URPR11.SA", "TRXF11.SA", "ALZR11.SA", "GGRC11.SA", "HABT11.SA", "CVBI11.SA", "VGIR11.SA"
+]
+
+def formatar_ticker(t):
+    return t if t.endswith(".SA") else f"{t}.SA"
+
+def executar_scanner(tipo="ACOES"):
     motor = MotorAnalise()
-    
-    # Lista Selecionada de FIIs Líquidos
-    tickers_alvo = [
-        "MXRF11.SA", "HGLG11.SA", "XPML11.SA", "KNCR11.SA", "KNRI11.SA", 
-        "VISC11.SA", "HGBS11.SA", "CPTS11.SA", "HGRU11.SA", "BTLG11.SA",
-        "RECR11.SA", "IRDM11.SA", "ALZR11.SA", "JSRE11.SA", "VILG11.SA",
-        "TRXF11.SA", "HGRE11.SA", "XPLG11.SA", "MALL11.SA", "BRCO11.SA",
-        "LVBI11.SA", "PVBI11.SA", "RBRR11.SA", "TGAR11.SA", "KNSC11.SA",
-        "GGRC11.SA", "VGHF11.SA", "VGIR11.SA", "CVBI11.SA", "RBRF11.SA"
-    ]
+    lista = TICKERS_ACOES if tipo == "ACOES" else TICKERS_FIIS
     
     resultados = []
+    total = len(lista)
     
-    for t in tickers_alvo:
+    # Barra de progresso na interface
+    bar = st.progress(0, text=f"Escaneando {tipo}...")
+    
+    # Download em lote para ser rápido (Batch Download)
+    try:
+        dados_batch = yf.download(lista, period="2y", progress=False)
+        # Se o download falhar ou vier vazio
+        if dados_batch.empty:
+            st.error("Erro de conexão com Yahoo Finance.")
+            return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Erro no download em lote: {e}")
+        return pd.DataFrame()
+
+    for i, ticker in enumerate(lista):
         try:
-            # Baixa histórico curto para performance (suficiente para indicadores técnicos)
-            ticker_obj = yf.Ticker(t)
-            hist = ticker_obj.history(period="6mo")
-            info = ticker_obj.info
+            # Extrai dados do lote para não chamar API toda hora
+            hist = pd.DataFrame()
+            if isinstance(dados_batch.columns, pd.MultiIndex):
+                # Estrutura complexa do yfinance novo
+                try:
+                    hist['Close'] = dados_batch['Close'][ticker]
+                    hist['Volume'] = dados_batch['Volume'][ticker]
+                    # Limpa NaNs
+                    hist = hist.dropna()
+                except:
+                    continue
+            else:
+                # Fallback
+                continue
             
-            # Chama o MotorAnalise para processar este ativo
-            analise = motor.analisar(hist, info, t)
+            # Pega Info básica (aqui infelizmente precisa chamar API 1 a 1 para pegar fundamentos)
+            # Para otimizar, podemos pular info se o gráfico estiver muito feio, mas vamos pegar tudo por enquanto.
+            try:
+                info = yf.Ticker(ticker).info
+            except:
+                info = {}
+
+            analise = motor.analisar(hist, info, ticker)
             
             if analise:
-                # Se passou pelo motor, adiciona na lista
-                resultados.append({
-                    "Ticker": t.replace(".SA", ""),
-                    "Score IA": analise['score_ia'],
-                    "Preço": analise['preco'],
-                    "Valor Justo": analise['preco_justo'],
-                    "P/VP": analise['pvp'],
-                    "DY (12m)": analise['dy_anual'],
-                    "Decisão": analise['decisao_ia']
-                })
-        except: 
-            continue
+                # Filtro Básico: Só mostra o que tiver Score acima de 50 para não poluir
+                if analise['score_ia'] >= 50:
+                    resultados.append({
+                        "Ticker": ticker.replace(".SA", ""),
+                        "Score": analise['score_ia'],
+                        "Preço": analise['preco'],
+                        "Preço Justo": analise['preco_justo'],
+                        "Potencial (%)": ((analise['preco_justo'] / analise['preco']) - 1) * 100 if analise['preco'] > 0 else 0,
+                        "Tendência": analise['sinal_tecnico'],
+                        "Decisão": analise['decisao_ia'],
+                        "Motivos": analise['motivos']
+                    })
+        except Exception as e:
+            # Pula ativo com erro silenciosamente
+            pass
             
-    df = pd.DataFrame(resultados)
+        bar.progress((i + 1) / total)
+
+    bar.empty()
     
+    df = pd.DataFrame(resultados)
     if not df.empty:
-        # Ordena: Primeiro os melhores Scores, depois o maior DY
-        df = df.sort_values(by=["Score IA", "DY (12m)"], ascending=[False, False])
-        
+        # Ordena pelos melhores Scores
+        df = df.sort_values(by="Score", ascending=False)
+    
     return df
