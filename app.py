@@ -1,42 +1,47 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
-import yfinance as yf
-import plotly.express as px
 import numpy as np
-import re
+import time
 
 # ======================================================
-# 1. CONFIGURAÇÃO E CACHE RESET
+# 1. CONFIGURAÇÃO (PRIMEIRA LINHA)
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo v132", layout="wide", page_icon="🏦")
-
-if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v132":
-    st.session_state.versao_sistema = "v132"
-    st.cache_data.clear() # Limpa cache antigo para evitar conflitos de versão
-    st.toast("Sistema v132 Full Stack Carregado!", icon="🚀")
+st.set_page_config(page_title="Hedge Fund Ricardo v134", layout="wide", page_icon="🏦")
 
 # ======================================================
-# 2. IMPORTAÇÃO SEGURA
+# 2. VERIFICAÇÃO E IMPORTAÇÃO
 # ======================================================
+try:
+    import yfinance as yf
+    import plotly.express as px
+    import scipy
+    from scipy.signal import argrelextrema
+except ImportError as e:
+    st.error(f"❌ Erro Crítico: Biblioteca ausente. Instale: {e.name}")
+    st.stop()
+
 try:
     from motor import MotorAnalise
     from rebalance import rebalancear_e_aportar
     from scanner import executar_scanner
-    # Tenta importar módulos opcionais, mas não quebra se faltar
     try: from options import BlackScholes
     except: BlackScholes = None
     try: from tax import calcular_darf
     except: calcular_darf = None
 except Exception as e:
-    st.error(f"Erro ao carregar módulos: {e}")
+    st.error(f"❌ Erro ao carregar motor: {e}")
     st.stop()
 
+if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v134":
+    st.session_state.versao_sistema = "v134"
+    st.cache_data.clear()
+    st.toast("Sistema v134: Full Power & Seguro", icon="💎")
+
 # ======================================================
-# 3. FUNÇÕES DE DADOS E CARTEIRA
+# 3. DADOS
 # ======================================================
 def carregar_carteira_padrao():
-    # Sua lista completa original
+    # LISTA COMPLETA - SEM RESUMOS
     dados = [
         ["ALZR11.SA", 100, 10.81, "FIIs-Tijolo"], ["BBAS3.SA", 1703, 24.48, "Ações-Bancos"], 
         ["BBSE3.SA", 55, 35.64, "Ações-Seguridade"], ["BTCI11.SA", 502, 10.16, "FIIs-Papel"], 
@@ -61,14 +66,6 @@ if "carteira_acoes" not in st.session_state or st.session_state.carteira_acoes.e
     st.session_state.carteira_acoes = carregar_carteira_padrao()
 if "carteira_rf" not in st.session_state:
     st.session_state.carteira_rf = pd.DataFrame([["Tesouro Selic", 10000.0, "Pós-Fixado"]], columns=["Ativo", "Saldo Atual", "Tipo"])
-if "df_metas" not in st.session_state:
-    st.session_state.df_metas = pd.DataFrame([
-        {"Setor": "Renda Fixa", "Meta (%)": 20.0}, {"Setor": "Exterior", "Meta (%)": 15.0},
-        {"Setor": "Ações-Bancos", "Meta (%)": 10.0}, {"Setor": "Ações-Elétricas", "Meta (%)": 10.0},
-        {"Setor": "Ações-Seguridade", "Meta (%)": 5.0}, {"Setor": "Ações-Commodities", "Meta (%)": 5.0},
-        {"Setor": "Ações-Outros", "Meta (%)": 5.0}, {"Setor": "FIIs-Papel", "Meta (%)": 15.0},
-        {"Setor": "FIIs-Tijolo", "Meta (%)": 10.0}, {"Setor": "FIIs-Outros", "Meta (%)": 5.0}
-    ])
 
 # --- HELPERS ---
 def formatar_ticker_global(t):
@@ -92,7 +89,7 @@ def limpar_valor_monetario(valor):
         return float(v)
     except: return 0.0
 
-# --- IMPORTADOR B3 V115 (Completo) ---
+# --- IMPORTADOR B3 COMPLETO ---
 def encontrar_coluna(df, palavras_chave):
     colunas_lower = [str(c).lower() for c in df.columns]
     for chave in palavras_chave:
@@ -116,6 +113,7 @@ def processar_excel_b3(arquivo):
             if target_row == -1: continue
             df = pd.read_excel(arquivo, sheet_name=nome_aba, header=target_row)
             df = df.loc[:, ~df.columns.duplicated()]
+            
             col_ticker = encontrar_coluna(df, ["código", "negociação", "ticker"])
             col_produto = encontrar_coluna(df, ["produto", "ativo", "título", "especificação"]) 
             col_qtd = encontrar_coluna(df, ["quantidade", "qtd", "disponível"])
@@ -146,42 +144,24 @@ def processar_excel_b3(arquivo):
         return rv_final, carteira_rf_nova, "\n".join(log_msgs)
     except Exception as e: return None, None, f"Erro: {str(e)}"
 
-# --- ANALYTICS BLINDADO (v132) ---
-# 'show_spinner=False' evita o erro de Threading em loops
+# --- ANALYTICS CACHE ---
 @st.cache_data(ttl=300, show_spinner=False)
 def obter_dados(ticker, modo_crise):
     t = formatar_ticker_global(ticker)
-    
-    # 1. Histórico
     try:
-        ticker_obj = yf.Ticker(t)
-        hist = ticker_obj.history(period="2y")
+        t_obj = yf.Ticker(t)
+        hist = t_obj.history(period="2y")
         if hist.empty: return None
+        try: info = t_obj.info
+        except: info = {"symbol": t, "quoteType": "EQUITY"}
+        return MotorAnalise().analisar(hist, info, t, modo_crise)
     except: return None
 
-    # 2. Fundamentos (Com proteção contra bloqueio do Yahoo)
-    try:
-        info = ticker_obj.info
-    except Exception:
-        # Se bloquear, cria um info falso para não quebrar o código
-        info = {"symbol": t, "longName": t, "quoteType": "EQUITY"}
-    
-    # 3. Chama o Motor
-    return MotorAnalise().analisar(hist, info, t, modo_crise)
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def download_longo(tickers):
-    l = [formatar_ticker_global(t) for t in tickers]
-    try: return yf.download(l, period="5y", progress=False)['Close']
-    except: return pd.DataFrame()
-
-def calcular_consolidado():
-    trf = st.session_state.carteira_rf["Saldo Atual"].sum()
-    df = st.session_state.carteira_acoes.copy()
+@st.cache_data(ttl=3600, show_spinner=False)
+def calcular_consolidado_cached(df_dict):
+    df = pd.DataFrame(df_dict)
     tickers = [formatar_ticker_global(t) for t in df["Ticker"]]
-    
-    # Download em lote para performance
-    prices = pd.Series()
+    prices = pd.Series(dtype=float)
     try: 
         data = yf.download(tickers, period="1d", progress=False)['Close']
         if not data.empty: prices = data.iloc[-1]
@@ -190,26 +170,32 @@ def calcular_consolidado():
     vals = []
     for _, r in df.iterrows():
         t = formatar_ticker_global(r["Ticker"])
-        try: 
+        p = 0.0
+        try:
             if t in prices: p = float(prices[t])
-            else: 
-                d = obter_dados(t, False)
-                p = d.get('preco', 0) if d else 0.0
+            else:
+                ticker_obj = yf.Ticker(t)
+                h = ticker_obj.history(period="1d")
+                if not h.empty: p = float(h["Close"].iloc[-1])
         except: p = 0.0
         vals.append(r["Qtd"] * p)
-    
-    df["Valor Atual"] = vals
-    return trf, sum(vals), df
+    return vals
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def download_longo(tickers):
+    l = [formatar_ticker_global(t) for t in tickers]
+    try: return yf.download(l, period="5y", progress=False)['Close']
+    except: return pd.DataFrame()
 
 # ======================================================
-# UI - DASHBOARD PRINCIPAL
+# 4. UI - ESTRUTURA COMPLETA
 # ======================================================
-st.title("💰 Hedge Fund Ricardo v132 (Ultimate)")
+st.title("💰 Hedge Fund Ricardo v134 (Institutional)")
 
 with st.sidebar:
     st.header("⚙️ Risco")
     modo_crise = st.toggle("🔴 MODO CRISE", value=False)
-    if modo_crise: st.error("⚠️ PROTOCOLO DEFENSIVO ATIVO")
+    if modo_crise: st.error("⚠️ DEFESA ATIVA")
     
     st.divider()
     b3_file = st.file_uploader("📂 Importar B3 (Excel)", type=['xlsx'])
@@ -218,16 +204,16 @@ with st.sidebar:
         if rv: 
             st.session_state.carteira_acoes = pd.DataFrame(rv, columns=["Ticker", "Qtd", "PM", "Setor"])
             if rf: st.session_state.carteira_rf = pd.DataFrame(rf, columns=["Ativo", "Saldo Atual", "Tipo"])
-            st.success("Dados Atualizados!")
+            st.success("Dados B3 Importados!")
         else: st.error(log)
-    
-    st.divider()
-    if st.button("🆘 Restaurar Padrão"): 
-        st.session_state.carteira_acoes = carregar_carteira_padrao(); st.rerun()
-    if st.button("🧹 Limpar Cache"): st.cache_data.clear(); st.rerun()
 
-# LISTA COMPLETA DE ABAS
-tabs = st.tabs([
+    st.divider()
+    if st.button("Restaurar Padrão"): 
+        st.session_state.carteira_acoes = carregar_carteira_padrao(); st.rerun()
+    if st.button("Limpar Cache"): st.cache_data.clear(); st.rerun()
+
+# 10 ABAS COMPLETAS
+abas = st.tabs([
     "📊 Dash", 
     "🔎 Análise", 
     "🧪 Stress", 
@@ -240,133 +226,131 @@ tabs = st.tabs([
     "⚡ Opções"
 ])
 
-# --- ABA 0: DASH ---
-with tabs[0]:
-    rf, rv, df_rv = calcular_consolidado()
-    c1, c2, c3 = st.columns(3)
-    c1.metric("AUM Total", f"R$ {rf+rv:,.2f}")
-    c2.metric("Renda Variável", f"R$ {rv:,.2f}")
-    c3.metric("Renda Fixa", f"R$ {rf:,.2f}")
-    if not df_rv.empty:
-        df_g = df_rv.groupby("Setor")["Valor Atual"].sum().reset_index()
-        if rf > 0: df_g = pd.concat([df_g, pd.DataFrame([{"Setor": "Renda Fixa", "Valor Atual": rf}])])
-        st.plotly_chart(px.pie(df_g, values='Valor Atual', names='Setor', title="Alocação"), use_container_width=True)
+# ABA 0: DASHBOARD
+with abas[0]:
+    st.subheader("Visão Geral")
+    if not st.session_state.carteira_acoes.empty:
+        rf_val = st.session_state.carteira_rf["Saldo Atual"].sum()
+        df_rv = st.session_state.carteira_acoes.copy()
+        
+        # Executa cálculo pesado com spinner local para não travar tela branca
+        with st.spinner("Atualizando portfólio..."):
+            vals = calcular_consolidado_cached(df_rv.to_dict())
+        
+        df_rv["Valor Atual"] = vals
+        rv_val = sum(vals)
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Patrimônio Total", f"R$ {rf_val+rv_val:,.2f}")
+        c2.metric("Renda Variável", f"R$ {rv_val:,.2f}")
+        c3.metric("Renda Fixa", f"R$ {rf_val:,.2f}")
+        
+        if rv_val > 0:
+            df_g = df_rv.groupby("Setor")["Valor Atual"].sum().reset_index()
+            if rf_val > 0: df_g = pd.concat([df_g, pd.DataFrame([{"Setor": "Renda Fixa", "Valor Atual": rf_val}])])
+            st.plotly_chart(px.pie(df_g, values='Valor Atual', names='Setor', title="Alocação"), use_container_width=True)
+    else:
+        st.warning("Carteira Vazia.")
 
-# --- ABA 1: ANÁLISE DEEP DIVE ---
-with tabs[1]:
+# ABA 1: ANÁLISE DETALHADA
+with abas[1]:
     ticker = st.text_input("Ticker", "VALE3")
-    if st.button("Analisar (Full Data)"):
-        r = obter_dados(ticker, modo_crise)
+    if st.button("Analisar Ativo"):
+        with st.spinner(f"Analisando {ticker}..."):
+            r = obter_dados(ticker, modo_crise)
+        
         if r:
-            # 1. Score
-            st.markdown("### 1. Visão do Gestor (CIO)")
+            st.markdown("### 1. Painel de Controle")
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Score Final", f"{r.get('score_ia')}/100", r.get('decisao_ia'))
-            c2.metric("Qualidade", f"{r.get('score_qualidade')}/100", "Fundamentos")
-            c3.metric("Convicção", f"{r.get('score_conviccao')}/100", "Técnica")
+            c2.metric("Qualidade", f"{r.get('score_qualidade')}/100")
+            c3.metric("Convicção", f"{r.get('score_conviccao')}/100")
             c4.metric("Sentimento", f"{r.get('macro')}", r.get('news'))
             st.info(f"**Tese:** {r.get('motivos')}")
             if r.get('alertas'): st.error(f"**Riscos:** {r.get('alertas')}")
             st.divider()
-
-            # 2. Valuation
-            st.markdown("### 2. Visão Fundamentalista")
-            if not r.get('modelos_val'): st.warning("⚠️ Yahoo bloqueou fundamentos.")
             
+            st.markdown("### 2. Fundamentos")
             v1, v2, v3, v4 = st.columns(4)
             v1.metric("Preço Tela", f"R$ {r.get('preco',0):.2f}")
             v2.metric("Preço Justo", f"R$ {r.get('p_justo',0):.2f}")
             v3.metric("Preço Teto", f"R$ {r.get('p_teto',0):.2f}")
-            v4.metric("Margem Seg.", f"{r.get('margem',0)*100:.0f}%")
+            v4.metric("Margem", f"{r.get('margem',0)*100:.0f}%")
             
-            # Modelos Individuais
-            modelos = r.get('modelos_val', {})
-            if modelos:
-                st.caption("Detalhamento dos Modelos:")
-                cols_mod = st.columns(len(modelos))
-                idx=0
-                for k, v in modelos.items():
-                    cols_mod[idx].metric(k, f"R$ {v:.2f}")
-                    idx+=1
-            
-            # Brutos
-            f1, f2, f3, f4 = st.columns(4)
+            mod = r.get('modelos_val', {})
+            if mod:
+                st.write("#### 📐 Modelos Matemáticos")
+                cols = st.columns(len(mod))
+                for i, (k, v) in enumerate(mod.items()): cols[i].metric(k, f"R$ {v:.2f}")
+
+            st.write("#### 🏗️ Indicadores")
+            f1, f2, f3, f4, f5 = st.columns(5)
             f1.metric("P/VP", f"{r.get('pvp',0):.2f}")
             f2.metric("ROE", f"{r.get('roe',0)*100:.1f}%")
             f3.metric("DY (12m)", f"{r.get('dy_anual',0):.2f}%")
             f4.metric("Dívida/EBITDA", f"{r.get('divida_ebitda',0):.2f}")
+            f5.metric("Margem Líq.", f"{r.get('margem_liq',0)*100:.1f}%")
             
-            d_fund = r.get('dados_fund', {})
-            if d_fund:
-                f5, f6, f7, f8 = st.columns(4)
-                f5.metric("LPA", f"R$ {d_fund.get('LPA',0):.2f}")
-                f6.metric("VPA", f"R$ {d_fund.get('VPA',0):.2f}")
-                f7.metric("Div. Rate", f"R$ {d_fund.get('Div. Anual',0):.2f}")
-                f8.metric("Ke (Custo)", f"{d_fund.get('Ke',0)*100:.1f}%")
             st.divider()
 
-            # 3. Técnica
-            st.markdown("### 3. Visão de Trading")
+            st.markdown("### 3. Técnica")
             t1, t2, t3, t4 = st.columns(4)
             t1.metric("RSI (14)", f"{r.get('rsi',50):.0f}")
             t2.metric("MME 9 vs 21", "Alta" if r.get('mme9',0)>r.get('mme21',0) else "Baixa")
             t3.metric("Padrão", r.get('padrao_grafico') or "-")
-            t4.metric("Candle", r.get('candle') or "-")
             
-            # Gráfico
+            import streamlit.components.v1 as components
             t_fmt = formatar_ticker_global(ticker)
             symbol = f"BMFBOVESPA:{t_fmt.replace('.SA','')}"
             components.html(f"""<div class="tradingview-widget-container"><div id="tv"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{ "width": "100%", "height": 400, "symbol": "{symbol}", "interval": "D", "theme": "light", "container_id": "tv" }});</script></div>""", height=400)
 
-# --- ABA 2: STRESS ---
-with tabs[2]:
-    st.subheader("🧪 Simulador de Choques")
+# ABA 2: STRESS
+with abas[2]:
     if st.button("Rodar Stress Test"):
-        motor = MotorAnalise(); total = {}; prog = st.progress(0)
-        for i, row in st.session_state.carteira_acoes.iterrows():
-            d = obter_dados(row["Ticker"], False)
-            p = d.get('preco', 0) if d else 0
-            res = motor.calcular_stress_test(row["Ticker"], row["Qtd"], p)
-            for k, v in res.items(): total[k] = total.get(k, 0) + v
-            prog.progress((i+1)/len(st.session_state.carteira_acoes))
-        prog.empty()
-        for k, v in total.items(): st.metric(k, f"R$ {v:,.2f}", delta_color="inverse")
+        with st.spinner("Simulando colapso de mercado..."):
+            motor = MotorAnalise(); total = {}
+            for i, row in st.session_state.carteira_acoes.iterrows():
+                d = obter_dados(row["Ticker"], False)
+                p = d.get('preco', 0) if d else 0
+                res = motor.calcular_stress_test(row["Ticker"], row["Qtd"], p)
+                for k, v in res.items(): total[k] = total.get(k, 0) + v
+            for k, v in total.items(): st.metric(k, f"R$ {v:,.2f}", delta_color="inverse")
 
-# --- ABA 3: CORRELAÇÃO ---
-with tabs[3]:
+# ABA 3: CORRELAÇÃO
+with abas[3]:
     if st.button("Gerar Matriz"):
-        tickers = [formatar_ticker_global(t) for t in st.session_state.carteira_acoes["Ticker"]]
-        corr = yf.download(tickers, period="6mo", progress=False)['Close'].corr()
-        st.plotly_chart(px.imshow(corr, text_auto=True, color_continuous_scale="RdBu_r"), use_container_width=True)
+        with st.spinner("Calculando correlações..."):
+            ts = [formatar_ticker_global(t) for t in st.session_state.carteira_acoes["Ticker"]]
+            corr = yf.download(ts, period="6mo", progress=False)['Close'].corr()
+            st.plotly_chart(px.imshow(corr, text_auto=True, color_continuous_scale="RdBu_r"))
 
-# --- DEMAIS ABAS ---
-with tabs[4]: st.session_state.carteira_acoes = st.data_editor(st.session_state.carteira_acoes, num_rows="dynamic", use_container_width=True)
-with tabs[5]: 
+# DEMAIS ABAS
+with abas[4]: st.session_state.carteira_acoes = st.data_editor(st.session_state.carteira_acoes, num_rows="dynamic", use_container_width=True)
+
+with abas[5]:
     c1, c2 = st.columns(2)
     with c1: 
         if st.button("Escanear Ações"): st.dataframe(executar_scanner("ACOES"))
     with c2: 
         if st.button("Escanear FIIs"): st.dataframe(executar_scanner("FIIS"))
 
-with tabs[6]: st.session_state.carteira_rf = st.data_editor(st.session_state.carteira_rf, num_rows="dynamic", use_container_width=True)
+with abas[6]: st.session_state.carteira_rf = st.data_editor(st.session_state.carteira_rf, num_rows="dynamic", use_container_width=True)
 
-with tabs[7]:
-    st.subheader("🔮 Monte Carlo")
-    if st.button("Simular"):
-        h = download_longo(st.session_state.carteira_acoes["Ticker"].tolist())
-        if not h.empty: 
-            ret = h.pct_change().dropna().mean(axis=1) if isinstance(h, pd.DataFrame) else h.pct_change().dropna()
-            v_atual = st.session_state.carteira_acoes["Qtd"].mul(h.iloc[-1].values, fill_value=0).sum() if not h.empty else 10000
-            sim = MotorAnalise().monte_carlo_carteira(ret, v_atual, 2000)
-            st.line_chart(sim)
+with abas[7]:
+    if st.button("Simular Futuro"):
+        with st.spinner("Rodando Monte Carlo..."):
+            h = download_longo(st.session_state.carteira_acoes["Ticker"].tolist())
+            if not h.empty:
+                ret = h.pct_change().dropna().mean(axis=1) if isinstance(h, pd.DataFrame) else h.pct_change().dropna()
+                v_atual = st.session_state.carteira_acoes["Qtd"].mul(h.iloc[-1].values, fill_value=0).sum() if not h.empty else 10000
+                sim = MotorAnalise().monte_carlo_carteira(ret, v_atual, 2000)
+                st.line_chart(sim)
 
-with tabs[8]:
-    st.subheader("🦁 Fiscal")
+with abas[8]:
     if calcular_darf: st.table(calcular_darf(st.session_state.carteira_acoes))
-    else: st.warning("Módulo tax.py ausente")
+    else: st.warning("Módulo Fiscal não encontrado.")
 
-with tabs[9]:
-    st.subheader("⚡ Opções")
+with abas[9]:
     if BlackScholes:
         c1, c2 = st.columns(2)
         with c1: 
@@ -376,4 +360,4 @@ with tabs[9]:
         if st.button("Calc Gregas"):
             g = BlackScholes(S, K, D/365, 0.13, V, "call").calcular_gregas()
             st.write(g)
-    else: st.warning("Módulo options.py ausente")
+    else: st.warning("Módulo Opções não encontrado.")
