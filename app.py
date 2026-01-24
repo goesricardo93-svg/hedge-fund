@@ -5,17 +5,17 @@ import yfinance as yf
 import plotly.express as px
 import numpy as np
 import re
+import time
 
 # ======================================================
 # 1. CONFIGURAÇÃO
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo v128.2", layout="wide", page_icon="🏦")
+st.set_page_config(page_title="Hedge Fund Ricardo v129", layout="wide", page_icon="🏦")
 
-# Auto-Limpeza de Cache na atualização de versão para evitar KeyError
-if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v128.2":
-    st.session_state.versao_sistema = "v128.2"
-    st.cache_data.clear() # <--- FORÇA A LIMPEZA DO CACHE ANTIGO
-    st.toast("Sistema Atualizado v128.2: Cache Limpo e Estável!", icon="🛡️")
+if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v129":
+    st.session_state.versao_sistema = "v129"
+    st.cache_data.clear()
+    st.toast("Sistema Blindado v129: Proteção contra Queda de Conexão Ativa!", icon="🛡️")
 
 # ======================================================
 # 2. IMPORTAÇÃO
@@ -62,9 +62,7 @@ if "carteira_rf" not in st.session_state:
 # --- HELPERS ---
 def formatar_ticker_global(t):
     t = str(t).upper().strip()
-    if t in ["BTC", "ETH", "SOL", "USDT"]: return f"{t}-USD"
-    if "." in t: return t
-    if any(char.isdigit() for char in t): return f"{t}.SA"
+    if any(char.isdigit() for char in t) and "." not in t: return f"{t}.SA"
     return t
 
 def formatar_ticker_b3(cod):
@@ -83,7 +81,7 @@ def limpar_valor_monetario(valor):
         return float(v)
     except: return 0.0
 
-# --- IMPORTADOR B3 ---
+# --- IMPORTADOR B3 V115 ---
 def encontrar_coluna(df, palavras_chave):
     colunas_lower = [str(c).lower() for c in df.columns]
     for chave in palavras_chave:
@@ -143,11 +141,29 @@ def processar_excel_b3(arquivo):
         return carteira_rv_final, carteira_rf_nova, "\n".join(log_msgs)
     except Exception as e: return None, None, f"Erro: {str(e)}"
 
-# --- ANALYTICS ---
+# --- ANALYTICS BLINDADO (v129) ---
 @st.cache_data(ttl=300)
 def obter_dados(ticker, modo_crise):
     t = formatar_ticker_global(ticker)
-    return MotorAnalise().analisar(yf.Ticker(t).history(period="2y"), yf.Ticker(t).info, t, modo_crise)
+    
+    # 1. Tenta baixar o Histórico (Gráfico) - Raramente falha
+    try:
+        ticker_obj = yf.Ticker(t)
+        hist = ticker_obj.history(period="2y")
+        if hist.empty: return None
+    except:
+        return None
+
+    # 2. Tenta baixar os Fundamentos (.info) - É aqui que o Yahoo bloqueia
+    try:
+        info = ticker_obj.info
+    except Exception:
+        # Se bloquear, usamos um info "placeholder" para o app não quebrar
+        # O MotorAnalise vai tratar os zeros como falta de dados, mas vai mostrar o gráfico
+        info = {"symbol": t, "longName": t, "quoteType": "EQUITY"}
+    
+    # 3. Chama o Motor
+    return MotorAnalise().analisar(hist, info, t, modo_crise)
 
 @st.cache_data(ttl=86400)
 def download_longo(tickers):
@@ -175,7 +191,7 @@ def calcular_consolidado():
 # ======================================================
 # UI - DASHBOARD
 # ======================================================
-st.title("💰 Hedge Fund Ricardo v128 (Robust)")
+st.title("💰 Hedge Fund Ricardo v129 (Anti-Crash)")
 
 with st.sidebar:
     st.header("⚙️ Risco")
@@ -210,7 +226,7 @@ with tabs[0]:
         if rf > 0: df_g = pd.concat([df_g, pd.DataFrame([{"Setor": "Renda Fixa", "Valor Atual": rf}])])
         st.plotly_chart(px.pie(df_g, values='Valor Atual', names='Setor', title="Alocação"), use_container_width=True)
 
-# ABA 1: ANÁLISE COMPLETA (CORRIGIDA COM .get())
+# ABA 1: ANÁLISE COMPLETA (PROTEGIDA COM .GET)
 with tabs[1]:
     ticker = st.text_input("Ticker", "VALE3")
     if st.button("Analisar (Dados Brutos)"):
@@ -229,6 +245,11 @@ with tabs[1]:
 
             # 2. VALUATION
             st.markdown("### 2. Fundamentos (Deep Dive)")
+            
+            # Se não tiver dados de fundamento (bloqueio do Yahoo), mostra aviso
+            if not r.get('modelos_val'):
+                st.warning("⚠️ Atenção: Yahoo Finance limitou o acesso aos Fundamentos (P/VP, Valuation). Exibindo apenas Análise Técnica/Gráfica. Tente novamente em alguns minutos.")
+            
             v1, v2, v3, v4 = st.columns(4)
             v1.metric("Preço Tela", f"R$ {r.get('preco',0):.2f}")
             v2.metric("Preço Justo", f"R$ {r.get('p_justo',0):.2f}")
@@ -237,14 +258,13 @@ with tabs[1]:
             
             # Modelos Individuais (Safe Access)
             modelos = r.get('modelos_val', {})
-            if models := modelos:
+            if modelos:
                 st.write("#### 📐 Modelos Matemáticos")
-                cols_mod = st.columns(len(models))
+                cols_mod = st.columns(len(modelos))
                 idx=0
-                for k, v in models.items():
+                for k, v in modelos.items():
                     cols_mod[idx].metric(k, f"R$ {v:.2f}")
                     idx+=1
-            else: st.warning("Dados insuficientes para Valuation.")
 
             # Dados Brutos Fundamentais
             st.write("#### 🏗️ Indicadores Estruturais")
