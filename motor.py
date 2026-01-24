@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import yfinance as yf
+from datetime import timedelta
 from scipy.signal import argrelextrema
 
 class MotorAnalise:
@@ -23,12 +24,12 @@ class MotorAnalise:
                     if var != 0: beta = cov / var
             except: pass
             
-            exp = qtd * preco_atual
+            exposicao = qtd * preco_atual
             return {
-                "Crash Leve (-10%)": exp * (beta * -0.10),
-                "Crash Severo (-30%)": exp * (beta * -0.30),
-                "Juros Explosivos": exp * (beta * -0.15) if "11.SA" in ticker else exp * (beta * -0.05),
-                "Boom Commodities": exp * (beta * 0.20) if "VALE" in ticker or "PETR" in ticker else 0,
+                "Crash Leve (-10%)": exposicao * (beta * -0.10),
+                "Crash Severo (-30%)": exposicao * (beta * -0.30),
+                "Juros Explosivos": exposicao * (beta * -0.15) if "11.SA" in ticker else exposicao * (beta * -0.05),
+                "Boom Commodities": exposicao * (beta * 0.20) if "VALE" in ticker or "PETR" in ticker else 0,
                 "Beta": beta
             }
         except: return {}
@@ -182,7 +183,7 @@ class MotorAnalise:
                 if dy > 10: sc_q += 10
                 if 0.85 <= pvp <= 1.05: sc_q += 10
             else:
-                if roe > 0.15: sc_q += 10
+                if roe > 0.15: sc_q += 10; motivos.append("ROE+")
                 if pvp < 1.5 and pvp > 0: sc_q += 5
                 if divida > 3: sc_q -= 15; alertas.append("Dívida")
 
