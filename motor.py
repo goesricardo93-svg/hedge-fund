@@ -8,30 +8,25 @@ from scipy.stats import norm
 class MotorAnalise:
     
     # ==============================================================================
-    # 1. NOVO: SIMULADOR DE STRESS TEST & CENÁRIOS (v126)
+    # 1. SIMULADOR DE STRESS TEST & CENÁRIOS (v126)
     # ==============================================================================
     def calcular_stress_test(self, ticker, qtd, preco_atual):
-        """
-        Calcula o impacto financeiro de cenários extremos baseado no Beta/Vol.
-        """
         try:
             t = yf.Ticker(ticker)
             hist = t.history(period="1y")
             if hist.empty: return {}
 
-            # Calcula Beta aproximado contra IBOV (se não tiver, usa vol relativa)
             try:
                 ibov = yf.download("^BVSP", period="1y", progress=False)['Close']
                 ret_ativo = hist['Close'].pct_change().dropna()
                 ret_ibov = ibov.pct_change().dropna()
                 
-                # Alinha datas
                 df_cov = pd.DataFrame({'Ativo': ret_ativo, 'Ibov': ret_ibov}).dropna()
                 cov = df_cov.cov().iloc[0,1]
                 var_ibov = df_cov['Ibov'].var()
                 beta = cov / var_ibov
             except:
-                beta = 1.0 # Fallback
+                beta = 1.0
 
             exposicao = qtd * preco_atual
             
@@ -45,22 +40,14 @@ class MotorAnalise:
         except: return {}
 
     def calcular_probabilidades(self, hist, preco_atual, dias=21):
-        """
-        Gera o Cone de Probabilidade (Monte Carlo Simplificado Gaussiano).
-        """
         try:
             retornos = hist['Close'].pct_change().dropna()
             vol_diaria = retornos.std()
             vol_periodo = vol_diaria * np.sqrt(dias)
             
-            # Intervalos de Confiança (1 Desvio Padrão ~ 68%)
             cenario_base_min = preco_atual * (1 - vol_periodo)
             cenario_base_max = preco_atual * (1 + vol_periodo)
-            
-            # Otimista (2 Desvios)
             otimista = preco_atual * (1 + (2 * vol_periodo))
-            
-            # Pessimista (2 Desvios)
             pessimista = preco_atual * (1 - (2 * vol_periodo))
             
             return {
@@ -73,7 +60,7 @@ class MotorAnalise:
         except: return {}
 
     # ==============================================================================
-    # 2. VALUATION (MANTIDO v125 - Com Ajuste de Crise)
+    # 2. VALUATION
     # ==============================================================================
     def calcular_valuation_consenso(self, info, preco_atual, ticker, modo_crise=False):
         modelos = {}
@@ -85,16 +72,14 @@ class MotorAnalise:
             div_anual = info.get('dividendRate', 0)
             if not div_anual: div_anual = div_yield * preco_atual
 
-            # AJUSTE v126: Modo Crise exige taxas maiores
             risk_free = 0.135 if modo_crise else 0.115 
             premio_risco = 0.07 if modo_crise else 0.05
             ke = risk_free + premio_risco
-            g = 0.01 if modo_crise else 0.02 # Crescimento menor na crise
+            g = 0.01 if modo_crise else 0.02
 
-            # Modelos (Graham, Gordon, Bazin, ROE) - Lógica Mantida
             if lpa > 0 and vpa > 0: modelos['Graham'] = np.sqrt(22.5 * lpa * vpa)
             if div_anual > 0: modelos['Gordon'] = div_anual * (1 + g) / (ke - g)
-            if div_anual > 0: modelos['Bazin'] = div_anual / (0.08 if modo_crise else 0.06) # Exige mais yield na crise
+            if div_anual > 0: modelos['Bazin'] = div_anual / (0.08 if modo_crise else 0.06)
             if roe > 0 and vpa > 0:
                 pvp_justo = (roe - g) / (ke - g)
                 if 0 < pvp_justo < 5: modelos['ROE'] = pvp_justo * vpa
@@ -104,20 +89,18 @@ class MotorAnalise:
 
             p_justo = float(np.median(validos))
             
-            # Margem Dinâmica
             is_fii = "11.SA" in ticker
             base_margem = 0.15 if is_fii else 0.25
-            if modo_crise: base_margem += 0.10 # +10% de margem na crise
+            if modo_crise: base_margem += 0.10
             
             p_teto = p_justo * (1 - base_margem)
             return p_justo, p_teto, base_margem, modelos
         except: return 0, 0, 0, {}
 
     # ==============================================================================
-    # 3. MÓDULOS AUXILIARES (News, Macro, Gráfico - MANTIDOS v124)
+    # 3. MÓDULOS AUXILIARES
     # ==============================================================================
     def analisar_sentimento_news(self, ticker):
-        # (Código Mantido da v124 - NLP News)
         try:
             t = yf.Ticker(ticker); news = t.news; score_news = 0
             if not news: return 0, "Sem Notícias"
@@ -131,27 +114,55 @@ class MotorAnalise:
         except: return 0, "Erro News"
 
     def analisar_macro(self):
-        # (Código Mantido v124)
         try:
             ibov = yf.download("^BVSP", period="1y", progress=False)['Close']
             if ibov.empty: return 0, "Neutro"
             return (5, "Bull") if ibov.iloc[-1] > ibov.rolling(200).mean().iloc[-1] else (-10, "Bear")
         except: return 0, "Neutro"
 
-    def detectar_padroes_graficos(self, h, l, c):
-        # (Código Mantido v123 - OCO, W, M, Cup)
-        padroes = []; pts = 0
+    def detectar_padroes_graficos(self, highs, lows, closes):
+        padroes = []; pontuacao = 0
         try:
-            # ... (Lógica geométrica complexa mantida para economizar espaço visual, mas funcionalmente igual v123)
-            return None, 0 # Placeholder para brevidade na resposta, o código real v123 deve estar aqui
+            n = 5
+            idx_t = argrelextrema(highs.values, np.greater_equal, order=n)[0]
+            idx_f = argrelextrema(lows.values, np.less_equal, order=n)[0]
+            topos = [(i, highs.iloc[i]) for i in idx_t]
+            fundos = [(i, lows.iloc[i]) for i in idx_f]
+            if len(topos)<3 or len(fundos)<3: return None, 0
+            ut, uf = topos[-3:], fundos[-3:]
+
+            if len(topos)>=2:
+                te, pe = topos[-2]; td, pd = topos[-1]
+                if (td-te > 20) and (abs(pe-pd)/pe < 0.05):
+                    smin = lows.iloc[te:td].min()
+                    if (pe-smin)/pe > 0.10 and abs(closes.iloc[-1]-pd)/pd < 0.05:
+                        padroes.append("☕ Cup & Handle"); pontuacao += 25
+            try:
+                st = np.polyfit([x[0] for x in ut], [x[1] for x in ut], 1)[0]
+                sf = np.polyfit([x[0] for x in uf], [x[1] for x in uf], 1)[0]
+                if abs(st)<0.05 and sf>0.1: padroes.append("📐 Triângulo Asc."); pontuacao += 15
+                elif st<-0.1 and abs(sf)<0.05: padroes.append("🔻 Triângulo Desc."); pontuacao -= 15
+            except: pass
+            if len(ut)==3:
+                if ut[1][1]>ut[0][1] and ut[1][1]>ut[2][1] and abs(ut[0][1]-ut[2][1])/ut[0][1]<0.05:
+                    if len(highs)-ut[2][0]<20: padroes.append("☠️ OCO"); pontuacao -= 20
+            if len(uf)>=2:
+                if abs(uf[-2][1]-uf[-1][1])/uf[-2][1]<0.03 and (len(lows)-uf[-1][0]<15):
+                     padroes.append("🚀 Fundo Duplo W"); pontuacao += 15
+            if len(ut)>=2:
+                if abs(ut[-2][1]-ut[-1][1])/ut[-2][1]<0.03 and (len(highs)-ut[-1][0]<15):
+                     padroes.append("📉 Topo Duplo M"); pontuacao -= 15
+            return ", ".join(padroes) if padroes else None, pontuacao
         except: return None, 0
 
-    def identifying_candle_pattern(self, o, h, l, c):
-        # (Código Mantido v121)
-        co = abs(c-o); r = h-l
-        if r==0: return None
-        if co <= r*0.03: return "Doji"
-        if min(c,o)-l >= 2*co and h-max(c,o) <= 0.1*co: return "🔨 Martelo"
+    def identifying_candle_pattern(self, open_p, high_p, low_p, close_p):
+        c = abs(close_p - open_p); r = high_p - low_p
+        if r == 0: return None
+        ss = high_p - max(close_p, open_p); si = min(close_p, open_p) - low_p
+        if c <= r*0.03: return "Doji"
+        if si >= 2*c and ss <= 0.1*c: return "🔨 Martelo"
+        if ss >= 2*c and si <= 0.1*c: return "☄️ Estrela Cadente"
+        if c >= r*0.90: return "Marubozu"
         return None
 
     def identificar_setor(self, info, ticker):
@@ -159,7 +170,7 @@ class MotorAnalise:
         return "Ação"
 
     # ==============================================================================
-    # 4. ANÁLISE CORE (ATUALIZADA v126 - QUALITY vs CONVICTION)
+    # 4. ANÁLISE CORE
     # ==============================================================================
     def analisar(self, hist, info, ticker, modo_crise=False):
         try:
@@ -171,17 +182,17 @@ class MotorAnalise:
             atual = float(c.iloc[-1])
 
             # --- SUB-SCORES ---
-            score_qualidade = 50 # Base (Fundamentos)
-            score_conviccao = 50 # Base (Timing/Fluxo)
+            score_qualidade = 50 
+            score_conviccao = 50 
             motivos = []; alertas = []
 
-            # 1. MACRO & NEWS (Afeta Convicção)
+            # 1. MACRO & NEWS
             macro_sc, macro_txt = self.analisar_macro()
             news_sc, news_txt = self.analisar_sentimento_news(ticker)
-            score_conviccao += macro_sc + news_score
-            if modo_crise and macro_sc < 0: score_conviccao -= 20 # Penalidade extra na crise
+            score_conviccao += macro_sc + news_sc
+            if modo_crise and macro_sc < 0: score_conviccao -= 20 
 
-            # 2. VALUATION (Afeta Qualidade)
+            # 2. VALUATION
             p_justo, p_teto, margem, modelos = self.calcular_valuation_consenso(info, atual, ticker, modo_crise)
             
             if p_justo > 0:
@@ -192,7 +203,7 @@ class MotorAnalise:
                 else:
                     score_qualidade -= 30; alertas.append("💸 Caro")
 
-            # Fundamentos Extras (Qualidade)
+            # Fundamentos Extras
             dy = (info.get('dividendYield', 0) or 0) * 100
             pvp = info.get('priceToBook', 0) or 0
             roe = info.get('returnOnEquity', 0) or 0
@@ -204,7 +215,7 @@ class MotorAnalise:
                 if roe > 0.15: score_qualidade += 10
                 if pvp < 1.5 and pvp > 0: score_qualidade += 5
 
-            # 3. TÉCNICA (Afeta Convicção)
+            # 3. TÉCNICA
             mme9 = c.ewm(span=9).mean().iloc[-1]
             mme21 = c.ewm(span=21).mean().iloc[-1]
             mm200 = c.rolling(200).mean().iloc[-1] if len(c)>200 else 0
@@ -213,26 +224,26 @@ class MotorAnalise:
             else: score_conviccao -= 15; alertas.append("📉 Tend. Baixa")
             
             if mm200 > 0:
-                if atual > mm200: score_conviccao += 10; score_qualidade += 5 (Tendencia Longa valida qualidade)
-                else: score_conviccao -= 20; alertas.append("⚠️ Abaixo MM200 (Bear)")
+                if atual > mm200: 
+                    score_conviccao += 10
+                    score_qualidade += 5 # (Tendencia Longa valida qualidade) - CORRIGIDO AQUI
+                else: 
+                    score_conviccao -= 20
+                    alertas.append("⚠️ Abaixo MM200 (Bear)")
 
-            # Liquidez (Kill Switch)
+            # Liquidez
             if v.iloc[-1] * atual < 50000: 
                 score_conviccao = 0; score_qualidade = 0; alertas.append("☠️ ILÍQUIDO")
 
             # --- CONSOLIDAÇÃO ---
-            # Na crise, Qualidade importa mais que Convicção
             peso_qualidade = 0.7 if modo_crise else 0.5
             peso_conviccao = 0.3 if modo_crise else 0.5
             
             score_final = (score_qualidade * peso_qualidade) + (score_conviccao * peso_conviccao)
-            
-            # Travas Finais
             score_final = min(100, max(0, int(score_final)))
             decisao = "🟢 COMPRA" if score_final >= 60 else "🔴 VENDA" if score_final <= 40 else "⚪ NEUTRO"
             if score_final >= 80: decisao = "🟢🟢 COMPRA FORTE"
 
-            # Probabilidades
             probs = self.calcular_probabilidades(hist, atual)
 
             return {
