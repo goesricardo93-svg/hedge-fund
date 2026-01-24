@@ -10,12 +10,12 @@ import time
 # ======================================================
 # 1. CONFIGURAÇÃO
 # ======================================================
-st.set_page_config(page_title="Hedge Fund Ricardo v130", layout="wide", page_icon="🏦")
+st.set_page_config(page_title="Hedge Fund Ricardo v130.1", layout="wide", page_icon="🏦")
 
-if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v130":
-    st.session_state.versao_sistema = "v130"
+if "versao_sistema" not in st.session_state or st.session_state.versao_sistema != "v130.1":
+    st.session_state.versao_sistema = "v130.1"
     st.cache_data.clear()
-    st.toast("Sistema v130: Threading Corrigido & Estável!", icon="🚀")
+    st.toast("Sistema v130.1: Índice de Abas Corrigido!", icon="✅")
 
 # ======================================================
 # 2. IMPORTAÇÃO
@@ -141,27 +141,19 @@ def processar_excel_b3(arquivo):
         return carteira_rv_final, carteira_rf_nova, "\n".join(log_msgs)
     except Exception as e: return None, None, f"Erro: {str(e)}"
 
-# --- ANALYTICS BLINDADO (v130) ---
-# AQUI ESTÁ A CORREÇÃO: show_spinner=False evita o RuntimeError em loops
-@st.cache_data(ttl=300, show_spinner=False) 
+# --- ANALYTICS BLINDADO ---
+@st.cache_data(ttl=300, show_spinner=False)
 def obter_dados(ticker, modo_crise):
     t = formatar_ticker_global(ticker)
-    
-    # 1. Histórico
     try:
         ticker_obj = yf.Ticker(t)
         hist = ticker_obj.history(period="2y")
         if hist.empty: return None
     except: return None
 
-    # 2. Fundamentos (com proteção contra bloqueio)
-    try:
-        info = ticker_obj.info
-    except Exception:
-        # Fallback se o Yahoo bloquear
-        info = {"symbol": t, "longName": t, "quoteType": "EQUITY"}
+    try: info = ticker_obj.info
+    except Exception: info = {"symbol": t, "longName": t, "quoteType": "EQUITY"}
     
-    # 3. Motor
     return MotorAnalise().analisar(hist, info, t, modo_crise)
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -174,35 +166,25 @@ def calcular_consolidado():
     trf = st.session_state.carteira_rf["Saldo Atual"].sum()
     df = st.session_state.carteira_acoes.copy()
     tickers = [formatar_ticker_global(t) for t in df["Ticker"]]
-    
-    # Tentativa em lote (rápida)
-    prices = pd.Series()
-    try: 
-        data = yf.download(tickers, period="1d", progress=False)['Close']
-        if not data.empty: prices = data.iloc[-1]
-    except: pass
-    
+    try: prices = yf.download(tickers, period="1d", progress=False)['Close'].iloc[-1]
+    except: prices = pd.Series()
     vals = []
     for _, r in df.iterrows():
         t = formatar_ticker_global(r["Ticker"])
         try: 
-            # Tenta pegar do lote primeiro
             if t in prices: p = float(prices[t])
-            # Se não tiver, chama individual (agora protegido com show_spinner=False)
             else: 
                 d = obter_dados(t, False)
                 p = d.get('preco', 0) if d else 0.0
-        except: 
-            p = 0.0
+        except: p = 0.0
         vals.append(r["Qtd"] * p)
-    
     df["Valor Atual"] = vals
     return trf, sum(vals), df
 
 # ======================================================
 # UI - DASHBOARD
 # ======================================================
-st.title("💰 Hedge Fund Ricardo v130 (Thread Safe)")
+st.title("💰 Hedge Fund Ricardo v130.1 (Correct Tabs)")
 
 with st.sidebar:
     st.header("⚙️ Risco")
@@ -224,7 +206,19 @@ with st.sidebar:
         st.session_state.carteira_acoes = carregar_carteira_padrao(); st.rerun()
     if st.button("🧹 Limpar Cache"): st.cache_data.clear(); st.rerun()
 
-tabs = st.tabs(["📊 Dash", "🔎 Análise", "🧪 Stress", "🔗 Correlação", "💼 Carteira", "🏢 Scanner", "💰 Futuro", "🦁 Fiscal", "⚡ Opções"])
+# DEFINIÇÃO CORRETA DAS 10 ABAS (0 a 9)
+tabs = st.tabs([
+    "📊 Dash", 
+    "🔎 Análise", 
+    "🧪 Stress", 
+    "🔗 Correlação", 
+    "💼 Carteira", 
+    "🏢 Scanner", 
+    "🛡️ Renda Fixa",  # <--- FALTAVA ESTA NA LISTA!
+    "💰 Futuro", 
+    "🦁 Fiscal", 
+    "⚡ Opções"
+])
 
 with tabs[0]:
     rf, rv, df_rv = calcular_consolidado()
@@ -237,13 +231,12 @@ with tabs[0]:
         if rf > 0: df_g = pd.concat([df_g, pd.DataFrame([{"Setor": "Renda Fixa", "Valor Atual": rf}])])
         st.plotly_chart(px.pie(df_g, values='Valor Atual', names='Setor', title="Alocação"), use_container_width=True)
 
-# ABA 1: ANÁLISE COMPLETA (PROTEGIDA COM .GET)
+# ABA 1: ANÁLISE
 with tabs[1]:
     ticker = st.text_input("Ticker", "VALE3")
     if st.button("Analisar (Dados Brutos)"):
         r = obter_dados(ticker, modo_crise)
         if r:
-            # 1. SCOREBOARD
             st.markdown("### 1. Painel de Controle")
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Score Final", f"{r.get('score_ia', 0)}/100", r.get('decisao_ia','-'))
@@ -254,12 +247,8 @@ with tabs[1]:
             if r.get('alertas'): st.error(f"**Alertas:** {r.get('alertas')}")
             st.divider()
 
-            # 2. VALUATION
             st.markdown("### 2. Fundamentos (Deep Dive)")
-            
-            # Se não tiver dados de fundamento (bloqueio do Yahoo), mostra aviso
-            if not r.get('modelos_val'):
-                st.warning("⚠️ Atenção: Yahoo Finance limitou o acesso aos Fundamentos. Exibindo apenas Análise Técnica.")
+            if not r.get('modelos_val'): st.warning("⚠️ Yahoo bloqueou Fundamentos.")
             
             v1, v2, v3, v4 = st.columns(4)
             v1.metric("Preço Tela", f"R$ {r.get('preco',0):.2f}")
@@ -267,7 +256,6 @@ with tabs[1]:
             v3.metric("Preço Teto", f"R$ {r.get('p_teto',0):.2f}")
             v4.metric("Margem Seg.", f"{r.get('margem',0)*100:.0f}%")
             
-            # Modelos Individuais
             modelos = r.get('modelos_val', {})
             if modelos:
                 st.write("#### 📐 Modelos Matemáticos")
@@ -277,7 +265,6 @@ with tabs[1]:
                     cols_mod[idx].metric(k, f"R$ {v:.2f}")
                     idx+=1
 
-            # Dados Brutos Fundamentais
             st.write("#### 🏗️ Indicadores Estruturais")
             f1, f2, f3, f4, f5 = st.columns(5)
             f1.metric("P/VP", f"{r.get('pvp',0):.2f}")
@@ -295,8 +282,6 @@ with tabs[1]:
                 f9.metric("Ke (Custo Cap.)", f"{d_fund.get('Ke',0)*100:.1f}%")
 
             st.divider()
-
-            # 3. TÉCNICA
             st.markdown("### 3. Raio-X Técnico")
             t1, t2, t3, t4, t5 = st.columns(5)
             rsi = r.get('rsi', 50)
@@ -339,7 +324,6 @@ with tabs[3]: # Correlação
         corr = yf.download(tickers, period="6mo", progress=False)['Close'].corr()
         st.plotly_chart(px.imshow(corr, text_auto=True, color_continuous_scale="RdBu_r"))
 
-# DEMAIS ABAS
 with tabs[4]: st.session_state.carteira_acoes = st.data_editor(st.session_state.carteira_acoes, num_rows="dynamic", use_container_width=True)
 with tabs[5]: 
     c1, c2 = st.columns(2)
@@ -348,7 +332,8 @@ with tabs[5]:
     with c2:
         if st.button("Escanear FIIs"): st.dataframe(executar_scanner("FIIS"))
 
-with tabs[6]: st.session_state.carteira_rf = st.data_editor(st.session_state.carteira_rf, num_rows="dynamic", use_container_width=True)
+with tabs[6]: # RENDA FIXA (Agora no índice 6 correto)
+    st.session_state.carteira_rf = st.data_editor(st.session_state.carteira_rf, num_rows="dynamic", use_container_width=True)
 
 with tabs[7]:
     st.subheader("🔮 Previsão de Futuro")
