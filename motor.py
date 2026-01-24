@@ -16,10 +16,8 @@ class MotorAnalise:
             hist = t.history(period="1y")
             if hist.empty: return {}
             
-            # Cálculo de Beta Manual
             try:
                 ibov = yf.download("^BVSP", period="1y", progress=False)['Close']
-                # Alinhamento de datas
                 df = pd.DataFrame({'Ativo': hist['Close'], 'Ibov': ibov}).dropna()
                 ret = df.pct_change().dropna()
                 cov = ret.cov().iloc[0,1]
@@ -59,7 +57,6 @@ class MotorAnalise:
     def calcular_valuation_consenso(self, info, preco_atual, ticker, modo_crise=False):
         modelos = {}
         try:
-            # Dados Brutos
             lpa = info.get('trailingEps', 0) or 0
             vpa = info.get('bookValue', 0) or 0
             div_yield = info.get('dividendYield', 0) or 0
@@ -67,13 +64,11 @@ class MotorAnalise:
             div_anual = info.get('dividendRate', 0)
             if not div_anual: div_anual = div_yield * preco_atual
 
-            # Premissas
             rf = 0.135 if modo_crise else 0.115 
             premio = 0.07 if modo_crise else 0.05
             ke = rf + premio
             g = 0.01 if modo_crise else 0.02
 
-            # Modelos Individuais
             if lpa > 0 and vpa > 0: modelos['Graham'] = np.sqrt(22.5 * lpa * vpa)
             if div_anual > 0: modelos['Gordon'] = div_anual * (1 + g) / (ke - g)
             if div_anual > 0: modelos['Bazin'] = div_anual / (0.08 if modo_crise else 0.06)
@@ -89,7 +84,6 @@ class MotorAnalise:
             
             p_teto = p_justo * (1 - margem)
             
-            # Retorna também dados brutos para exibição
             dados_brutos = {"LPA": lpa, "VPA": vpa, "ROE": roe, "Div. Anual": div_anual, "Ke": ke}
             
             return p_justo, p_teto, margem, modelos, dados_brutos
@@ -119,14 +113,16 @@ class MotorAnalise:
             return (5, "Bull Market") if bull else (-10, "Bear Market")
         except: return 0, "Neutro"
 
-    def detectar_padroes_graficos(self, h, l, c):
+    def detecting_padroes_graficos(self, h, l, c): # Renomeado para evitar conflito interno
         padroes = []; pts = 0
         try:
             n = 5
-            it = argrelextrema(h.values, np.greater_equal, order=n)[0]
-            if = argrelextrema(l.values, np.less_equal, order=n)[0]
-            topos = [(i, h.iloc[i]) for i in it]
-            fundos = [(i, l.iloc[i]) for i in if]
+            # CORREÇÃO AQUI: Mudamos 'it' e 'if' para 'idx_t' e 'idx_f'
+            idx_t = argrelextrema(h.values, np.greater_equal, order=n)[0]
+            idx_f = argrelextrema(l.values, np.less_equal, order=n)[0]
+            
+            topos = [(i, h.iloc[i]) for i in idx_t]
+            fundos = [(i, l.iloc[i]) for i in idx_f]
             
             # Cup&Handle
             if len(topos)>=2: 
@@ -140,10 +136,21 @@ class MotorAnalise:
                 if abs(st)<0.05 and sf>0.1: padroes.append("📐 Triângulo Asc."); pts += 15
                 elif st<-0.1 and abs(sf)<0.05: padroes.append("🔻 Triângulo Desc."); pts -= 15
             except: pass
-            # OCO/W/M
+            
+            # OCO
             if len(topos)>=3:
                 ut = topos[-3:]
                 if ut[1][1]>ut[0][1] and ut[1][1]>ut[2][1]: padroes.append("☠️ OCO"); pts -= 20
+            
+            # W (Fundo Duplo)
+            if len(fundos)>=2:
+                uf = fundos[-2:]
+                if abs(uf[0][1]-uf[1][1])/uf[0][1] < 0.03: padroes.append("🚀 Fundo Duplo W"); pts += 15
+
+            # M (Topo Duplo)
+            if len(topos)>=2:
+                ut = topos[-2:]
+                if abs(ut[0][1]-ut[1][1])/ut[0][1] < 0.03: padroes.append("📉 Topo Duplo M"); pts -= 15
             
             return ", ".join(padroes) if padroes else None, pts
         except: return None, 0
@@ -167,12 +174,11 @@ class MotorAnalise:
             data = divs.index[-1].strftime('%d/%m/%Y')
             corte = pd.Timestamp.now(tz=divs.index.tz)-timedelta(days=365)
             dy_12m = divs[divs.index >= corte].sum()
-            media = divs[divs.index >= (pd.Timestamp.now(tz=divs.index.tz)-timedelta(days=365*3))].mean() * 12 # Est média anualizada
-            return {"ultimo": ult, "data": data, "dy_12m": dy_12m, "media_ano": media}
-        except: return {"ultimo": 0, "data": "-", "dy_12m": 0, "media_ano": 0}
+            return {"ultimo": ult, "data": data, "dy_12m": dy_12m}
+        except: return {"ultimo": 0, "data": "-", "dy_12m": 0}
 
     # ==============================================================================
-    # 4. ANÁLISE CORE (RETORNO DE TUDO)
+    # 4. ANÁLISE CORE
     # ==============================================================================
     def analisar(self, hist, info, ticker, modo_crise=False):
         try:
@@ -187,7 +193,7 @@ class MotorAnalise:
             macro_sc, macro_txt = self.analisar_macro()
             news_sc, news_txt = self.analisar_sentimento_news(ticker)
             p_justo, p_teto, margem, modelos, dados_fund = self.calcular_valuation_consenso(info, atual, ticker, modo_crise)
-            fig_name, fig_sc = self.detectar_padroes_graficos(h, l, c)
+            fig_name, fig_sc = self.detecting_padroes_graficos(h, l, c)
             candle = self.identifying_candle_pattern(hist["Open"].iloc[-1], h.iloc[-1], l.iloc[-1], atual)
             probs = self.calcular_probabilidades(hist, atual)
             div_info = self.consultar_dividendos(ticker)
@@ -254,15 +260,11 @@ class MotorAnalise:
                 "score_ia": score_final, "decisao_ia": decisao,
                 "score_qualidade": int(sc_qual), "score_conviccao": int(sc_conv),
                 "motivos": ", ".join(motivos), "alertas": ", ".join(alertas),
-                # Valuation Completo
                 "preco": atual, "p_justo": p_justo, "p_teto": p_teto, "margem": margem, 
                 "modelos_val": modelos, "dados_fund": dados_fund,
-                # Contexto
                 "macro": macro_txt, "news": news_txt, "probs": probs,
-                # Técnica
                 "rsi": rsi, "mme9": mme9, "mme21": mme21, "mm200": mm200,
                 "padrao_grafico": fig_name, "candle": candle,
-                # Fundamentos
                 "dy_anual": dy, "pvp": pvp, "roe": roe, "divida_ebitda": divida_ebitda, "margem_liq": margem_liq,
                 "beta_info": beta_info, "div_info": div_info
             }
