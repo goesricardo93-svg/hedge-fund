@@ -1,187 +1,269 @@
+# ==============================================================================
+# ARQUITETURA ZERO - v150 (Debug & Rescue Mode)
+# ==============================================================================
 import streamlit as st
 import time
 
-# ======================================================
-# 1. CONFIGURAÇÃO (PRIMEIRA LINHA OBRIGATÓRIA)
-# ======================================================
-st.set_page_config(page_title="Hedge Fund v145", layout="wide")
+# 1. GARANTIA DE VIDA: A primeira coisa que acontece é configurar a página
+st.set_page_config(page_title="Hedge Fund Debug", layout="wide")
 
-# Mensagem de Debug Inicial
-status_text = st.empty()
-status_text.text("🚀 Inicializando... (Se travar aqui, é falta de biblioteca)")
+# 2. PROVA DE VIDA: Escreve na tela imediatamente. Se você ver isso, a tela branca acabou.
+st.title("🛠️ Hedge Fund Ricardo - Modo Recuperação")
+status_box = st.empty()
+status_box.info("⏳ Inicializando núcleo do sistema... (Passo 1/4)")
+time.sleep(0.1)
 
-# ======================================================
-# 2. IMPORTAÇÃO SEGURA (PROTEGE CONTRA TELA BRANCA)
-# ======================================================
+# ==============================================================================
+# 3. CARREGAMENTO BLINDADO (Imports dentro do fluxo para pegar o erro)
+# ==============================================================================
 try:
+    status_box.info("⏳ Importando Pandas e Numpy... (Passo 2/4)")
     import pandas as pd
     import numpy as np
+    
+    status_box.info("⏳ Importando YFinance e Plotly... (Passo 3/4)")
     import yfinance as yf
     import plotly.express as px
-    import scipy
+    
+    status_box.info("⏳ Importando Ferramentas Matemáticas... (Passo 4/4)")
+    from datetime import datetime, timedelta
     from scipy.signal import argrelextrema
+    # Nota: Removemos scipy.stats se ele for o causador, usando numpy no lugar
+    
+    status_box.success("✅ Todas as bibliotecas carregadas com sucesso!")
+    time.sleep(1)
+    status_box.empty() # Limpa as mensagens de carregamento
+
 except ImportError as e:
-    st.error(f"❌ ERRO DE BIBLIOTECA: {e}")
-    st.info("Instale: pip install scipy yfinance plotly pandas numpy")
+    st.error(f"🛑 ERRO FATAL DE BIBLIOTECA: {e}")
+    st.warning("O sistema parou porque uma ferramenta necessária não está instalada.")
     st.stop()
-
-# Importa o Motor com proteção
-try:
-    from motor import MotorAnalise
 except Exception as e:
-    st.error(f"❌ ERRO NO ARQUIVO MOTOR.PY: {e}")
+    st.error(f"🛑 ERRO DESCONHECIDO NA INICIALIZAÇÃO: {e}")
     st.stop()
 
-# Módulos Opcionais (Scanner, Rebalance, etc)
-# Se não existirem, cria funções vazias para não quebrar
-try: from rebalance import rebalancear_e_aportar
-except: 
-    def rebalancear_e_aportar(*args): return pd.DataFrame()
-try: from scanner import executar_scanner
-except: 
-    def executar_scanner(*args): return pd.DataFrame()
-try: from options import BlackScholes
-except: BlackScholes = None
-try: from tax import calcular_darf
-except: calcular_darf = None
+# ==============================================================================
+# 4. MOTOR LÓGICO (Definido aqui dentro para garantir integridade)
+# ==============================================================================
+class MotorAnalise:
+    def calcular_stress_test(self, ticker, qtd, preco_atual):
+        try:
+            # Beta simplificado se falhar download
+            beta = 1.0
+            exp = qtd * preco_atual
+            return {
+                "Crash (-10%)": exp * -0.10,
+                "Crash (-30%)": exp * -0.30,
+                "Juros (+1%)": exp * -0.05,
+                "Commodities (+20%)": exp * 0.20 if "VALE" in ticker or "PETR" in ticker else 0
+            }
+        except: return {}
 
-status_text.empty() # Limpa a mensagem de carregamento
+    def calcular_valuation(self, info, preco_atual, ticker, modo_crise):
+        modelos = {}
+        try:
+            lpa = info.get('trailingEps', 0) or 0
+            vpa = info.get('bookValue', 0) or 0
+            div = info.get('dividendRate', 0) or (info.get('dividendYield', 0) or 0) * preco_atual
+            roe = info.get('returnOnEquity', 0) or 0
 
-# ======================================================
-# 3. LÓGICA DO SISTEMA
-# ======================================================
-if "versao_sistema" not in st.session_state:
-    st.session_state.versao_sistema = "v145"
-    st.success("Sistema Carregado com Sucesso!")
+            # Graham
+            if lpa > 0 and vpa > 0: modelos['Graham'] = (22.5 * lpa * vpa)**0.5
+            # Bazin
+            if div > 0: modelos['Bazin'] = div / (0.08 if modo_crise else 0.06)
+            # Gordon
+            ke = 0.12 if modo_crise else 0.10
+            g = 0.01
+            if div > 0: modelos['Gordon'] = div * (1+g) / (ke-g)
 
-# Cache compatível com versões antigas e novas
-try:
-    cache_func = st.cache_data
-except:
-    cache_func = st.cache(suppress_st_warning=True)
+            vals = [v for v in modelos.values() if v > 0]
+            p_justo = float(np.median(vals)) if vals else 0
+            
+            return p_justo, modelos, {"LPA": lpa, "VPA": vpa, "DIV": div}
+        except: return 0, {}, {}
 
-@cache_func
-def obter_dados(ticker, modo_crise):
-    # Formata ticker
-    t = str(ticker).upper().strip()
-    if any(char.isdigit() for char in t) and "." not in t: t += ".SA"
+    def analisar(self, hist, info, ticker, modo_crise):
+        if hist is None or hist.empty: return None
+        try:
+            c = hist["Close"]
+            atual = float(c.iloc[-1])
+            
+            p_justo, modelos, dados = self.calcular_valuation(info, atual, ticker, modo_crise)
+            
+            # Técnica
+            mme9 = c.ewm(span=9).mean().iloc[-1]
+            mme21 = c.ewm(span=21).mean().iloc[-1]
+            
+            delta = c.diff()
+            gain = delta.clip(lower=0).rolling(14).mean()
+            loss = -delta.clip(upper=0).rolling(14).mean()
+            if loss.iloc[-1] > 0:
+                rsi = 100 - (100 / (1 + gain.iloc[-1]/loss.iloc[-1]))
+            else: rsi = 50
+
+            score = 50
+            motivos = []
+            if p_justo > 0 and atual < p_justo: score += 20; motivos.append("Barato")
+            if mme9 > mme21: score += 15; motivos.append("Tendência Alta")
+            if rsi < 30: score += 15; motivos.append("Sobrevendido")
+            
+            decisao = "COMPRA" if score > 60 else "VENDA" if score < 40 else "NEUTRO"
+            
+            return {
+                "score": score, "decisao": decisao, "motivos": ", ".join(motivos),
+                "preco": atual, "p_justo": p_justo, "modelos": modelos,
+                "rsi": rsi, "mme9": mme9, "mme21": mme21, "dados": dados
+            }
+        except Exception as e:
+            st.error(f"Erro na análise matemática: {e}")
+            return None
+
+# ==============================================================================
+# 5. INTERFACE DO USUÁRIO
+# ==============================================================================
+
+# Barra Lateral
+st.sidebar.header("⚙️ Configuração")
+modo_crise = st.sidebar.checkbox("Modo Crise", value=False)
+
+if st.sidebar.button("Limpar Cache"):
+    try: st.cache_data.clear()
+    except: st.experimental_rerun()
+
+# Navegação Simples (Funciona em qualquer versão)
+menu = st.sidebar.radio("Menu", ["Dashboard", "Análise", "Scanner", "Opções"])
+
+# --- DASHBOARD ---
+if menu == "Dashboard":
+    st.subheader("📊 Carteira")
     
-    try:
-        t_obj = yf.Ticker(t)
-        hist = t_obj.history(period="2y")
-        if hist.empty: return None
-        try: info = t_obj.info
-        except: info = {}
-        return MotorAnalise().analisar(hist, info, t, modo_crise)
-    except: return None
-
-@cache_func
-def download_longo(tickers):
-    l = [t + ".SA" if "." not in t else t for t in tickers]
-    return yf.download(l, period="5y", progress=False)['Close']
-
-def carregar_carteira_padrao():
-    return pd.DataFrame([
-        ["BBAS3", 1703], ["VALE3", 152], ["PETR4", 900], ["TAEE4", 1000], 
-        ["ALZR11", 100], ["HGLG11", 20], ["KNCR11", 27]
+    # Carteira Fixa para Teste
+    carteira = pd.DataFrame([
+        ["BBAS3.SA", 1703], ["VALE3.SA", 152], ["PETR4.SA", 900], 
+        ["TAEE11.SA", 1000], ["ALZR11.SA", 100]
     ], columns=["Ticker", "Qtd"])
-
-if "carteira_acoes" not in st.session_state:
-    st.session_state.carteira_acoes = carregar_carteira_padrao()
-if "carteira_rf" not in st.session_state:
-    st.session_state.carteira_rf = pd.DataFrame([["Tesouro Selic", 10000.0]], columns=["Ativo", "Saldo"])
-
-# ======================================================
-# 4. INTERFACE
-# ======================================================
-st.title("💰 Hedge Fund Ricardo v145")
-
-with st.sidebar:
-    st.header("Configurações")
-    # Checkbox é mais seguro que Toggle em versões antigas
-    modo_crise = st.checkbox("Modo Crise (Defensivo)", value=False)
     
-    if st.button("Recarregar Padrão"):
-        st.session_state.carteira_acoes = carregar_carteira_padrao()
-        st.experimental_rerun()
+    if st.button("Atualizar Valores"):
+        progress = st.progress(0)
+        total = 0
+        motor = MotorAnalise()
+        
+        # Download em Loop (Mais seguro que lote para debug)
+        for i, row in carteira.iterrows():
+            try:
+                t = row["Ticker"]
+                ticker_obj = yf.Ticker(t)
+                h = ticker_obj.history(period="1d")
+                if not h.empty:
+                    p = float(h["Close"].iloc[-1])
+                    total += p * row["Qtd"]
+            except: pass
+            progress.progress((i+1)/len(carteira))
+        
+        st.metric("Patrimônio Total Estimado", f"R$ {total:,.2f}")
+        st.dataframe(carteira)
+    else:
+        st.info("Clique em 'Atualizar Valores' para conectar à B3.")
 
-# Tabs
-tabs = st.tabs(["Dash", "Análise", "Stress", "Matriz", "Carteira", "Scanner", "Monte Carlo", "Opções"])
-
-with tabs[0]: # Dash
-    if st.button("Atualizar Cotações"):
-        with st.spinner("Baixando..."):
-            vals = []
-            df = st.session_state.carteira_acoes
-            for _, r in df.iterrows():
-                d = obter_dados(r["Ticker"], False)
-                p = d['preco'] if d else 0.0
-                vals.append(p * r["Qtd"])
-            st.session_state.total_rv = sum(vals)
-            st.success("Atualizado!")
+# --- ANÁLISE ---
+elif menu == "Análise":
+    st.subheader("🔎 Deep Dive")
+    ticker = st.text_input("Ticker", "VALE3.SA")
     
-    if "total_rv" in st.session_state:
-        st.metric("Total Renda Variável", f"R$ {st.session_state.total_rv:,.2f}")
-
-with tabs[1]: # Análise
-    t = st.text_input("Ticker", "VALE3")
     if st.button("Analisar"):
-        r = obter_dados(t, modo_crise)
-        if r:
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Score", f"{r['score_ia']}", r['decisao_ia'])
-            c2.metric("Qualidade", r['score_qualidade'])
-            c3.metric("Convicção", r['score_conviccao'])
-            st.info(f"Motivos: {r['motivos']}")
+        with st.spinner("Baixando dados..."):
+            try:
+                # 1. Baixar Dados
+                t_obj = yf.Ticker(ticker)
+                hist = t_obj.history(period="1y")
+                
+                if hist.empty:
+                    st.error(f"Não foi possível baixar dados para {ticker}")
+                else:
+                    try: info = t_obj.info
+                    except: info = {}
+                    
+                    # 2. Rodar Motor
+                    motor = MotorAnalise()
+                    res = motor.analisar(hist, info, ticker, modo_crise)
+                    
+                    if res:
+                        # Resultados
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("Score", f"{res['score']}", res['decisao'])
+                        c2.metric("Preço Justo", f"R$ {res['p_justo']:.2f}")
+                        c3.metric("RSI", f"{res['rsi']:.0f}")
+                        
+                        st.info(f"Motivos: {res['motivos']}")
+                        
+                        st.write("#### Detalhes de Valuation")
+                        st.json(res['modelos'])
+                        
+                        st.write("#### Gráfico")
+                        st.line_chart(hist["Close"])
+                        
+                        st.write("#### Stress Test")
+                        stress = motor.calcular_stress_test(ticker, 100, res['preco'])
+                        st.write(stress)
+                    else:
+                        st.error("Erro interno no cálculo da análise.")
+                        
+            except Exception as e:
+                st.error(f"Erro na conexão ou processamento: {e}")
+
+# --- SCANNER ---
+elif menu == "Scanner":
+    st.subheader("📡 Scanner de Oportunidades")
+    st.write("O scanner verifica múltiplos ativos. Isso pode demorar.")
+    if st.button("Escanear IBOV"):
+        lista_teste = ["VALE3.SA", "PETR4.SA", "ITUB4.SA", "BBDC4.SA", "WEGE3.SA"]
+        res_scan = []
+        bar = st.progress(0)
+        motor = MotorAnalise()
+        
+        for i, t in enumerate(lista_teste):
+            try:
+                hist = yf.Ticker(t).history(period="6mo")
+                if not hist.empty:
+                    r = motor.analisar(hist, {}, t, modo_crise)
+                    if r:
+                        res_scan.append({
+                            "Ticker": t, "Preço": r['preco'], 
+                            "Score": r['score'], "Decisão": r['decisao']
+                        })
+            except: pass
+            bar.progress((i+1)/len(lista_teste))
             
-            st.write("### Valuation")
-            c4, c5, c6 = st.columns(3)
-            c4.metric("Preço Justo", f"R$ {r['p_justo']:.2f}")
-            c5.metric("Teto", f"R$ {r['p_teto']:.2f}")
-            c6.metric("Margem", f"{r['margem']*100:.0f}%")
-            st.write(r['modelos_val'])
+        if res_scan:
+            df = pd.DataFrame(res_scan)
+            st.dataframe(df.style.background_gradient(subset=['Score'], cmap='RdYlGn'))
+        else:
+            st.warning("Nenhum ativo retornou dados.")
+
+# --- OPÇÕES ---
+elif menu == "Opções":
+    st.subheader("⚡ Black & Scholes")
+    try:
+        from scipy.stats import norm
+        def black_scholes(S, K, T, r, sigma, option_type='call'):
+            d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+            d2 = d1 - sigma * np.sqrt(T)
+            if option_type == 'call':
+                return S * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
+            else:
+                return K * np.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+
+        c1, c2 = st.columns(2)
+        S = c1.number_input("Preço Atual", 30.0)
+        K = c2.number_input("Strike", 32.0)
+        sigma = c1.number_input("Volatilidade (%)", 30.0) / 100
+        T = c2.number_input("Dias Vencimento", 30) / 365
+        
+        if st.button("Calcular Prêmio"):
+            call = black_scholes(S, K, T, 0.1375, sigma, 'call')
+            put = black_scholes(S, K, T, 0.1375, sigma, 'put')
+            st.success(f"Call Teórica: R$ {call:.2f}")
+            st.error(f"Put Teórica: R$ {put:.2f}")
             
-            st.write("### Indicadores")
-            st.json({k:v for k,v in r.items() if k in ['dy_anual','pvp','roe','rsi','beta_info']})
-
-with tabs[2]: # Stress
-    if st.button("Rodar Stress Test"):
-        m = MotorAnalise()
-        total = {}
-        for i, row in st.session_state.carteira_acoes.iterrows():
-            d = obter_dados(row["Ticker"], False)
-            if d:
-                res = m.calcular_stress_test(row["Ticker"], row["Qtd"], d['preco'])
-                for k, v in res.items(): total[k] = total.get(k, 0) + v
-        for k, v in total.items(): st.metric(k, f"R$ {v:,.2f}")
-
-with tabs[3]: # Matriz
-    if st.button("Gerar"):
-        ts = [t+".SA" if "." not in t else t for t in st.session_state.carteira_acoes["Ticker"]]
-        h = yf.download(ts, period="6mo", progress=False)['Close']
-        st.plotly_chart(px.imshow(h.corr(), text_auto=True, color_continuous_scale="RdBu_r"))
-
-with tabs[4]: # Carteira
-    st.session_state.carteira_acoes = st.data_editor(st.session_state.carteira_acoes)
-
-with tabs[5]: # Scanner
-    c1, c2 = st.columns(2)
-    if c1.button("Scanner Ações"): st.dataframe(executar_scanner("ACOES"))
-    if c2.button("Scanner FIIs"): st.dataframe(executar_scanner("FIIS"))
-
-with tabs[6]: # Monte Carlo
-    if st.button("Simular"):
-        ts = st.session_state.carteira_acoes["Ticker"].tolist()
-        h = download_longo(ts)
-        if not h.empty:
-            ret = h.pct_change().dropna().mean(axis=1)
-            sim = MotorAnalise().monte_carlo_carteira(ret, 100000, 1000)
-            st.line_chart(sim)
-
-with tabs[7]: # Opções
-    if BlackScholes:
-        S = st.number_input("Preço Ativo", 30.0)
-        K = st.number_input("Strike", 32.0)
-        if st.button("Calcular"):
-            st.write(BlackScholes(S, K, 30/365, 0.13, 0.3, "call").calcular_gregas())
-    else: st.warning("Módulo Opções ausente")
+    except ImportError:
+        st.warning("Biblioteca scipy.stats não disponível para cálculo de opções.")
