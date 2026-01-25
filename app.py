@@ -1,5 +1,5 @@
 # ==============================================================================
-# HEDGE FUND RICARDO V173 - GRAND MASTER (ALL FEATURES UNLOCKED)
+# HEDGE FUND RICARDO V174 - VISUAL TUNING (DY% & P/VP FIXED)
 # ==============================================================================
 import streamlit as st
 import pandas as pd
@@ -11,9 +11,9 @@ import streamlit.components.v1 as components
 
 # --- 1. CONFIGURAÇÃO VISUAL ---
 st.set_page_config(
-    page_title="Hedge Fund Ricardo v173", 
+    page_title="Hedge Fund Ricardo v174", 
     layout="wide", 
-    page_icon="🏛️",
+    page_icon="💎",
     initial_sidebar_state="expanded"
 )
 
@@ -35,8 +35,8 @@ class MotorAnalise:
 
     def detectar_tipo(self, ticker):
         t = ticker.replace(".SA", "")
-        # Units e Ações terminadas em 11 que não são FIIs
-        fake_fiis = ["TAEE11", "KLBN11", "SAPR11", "SANB11", "ALUP11", "BBSE3", "CXSE3", "ITUB4", "VALE3", "PETR4", "ELET3", "WEGE3", "PRIO3", "RRRP3", "JBSS3"]
+        # Lista de exceções (Units/Ações com final 11)
+        fake_fiis = ["TAEE11", "KLBN11", "SAPR11", "SANB11", "ALUP11", "BBSE3", "CXSE3", "ITUB4", "VALE3", "PETR4", "ELET3", "WEGE3", "PRIO3", "RRRP3", "JBSS3", "BBAS3"]
         if t.endswith("11") and t not in fake_fiis: return "FII"
         return "ACAO"
 
@@ -85,12 +85,15 @@ class MotorAnalise:
         vpa = info.get('bookValue', 0) or 0
         roe = info.get('returnOnEquity', 0) or 0
         div = dy_val if dy_val > 0 else (info.get('dividendRate', 0) or 0)
+        
+        # CÁLCULO DO P/VP (Agora garantido)
         pvp = preco / vpa if vpa > 0 else 0
+        
         rf = 0.135 if modo_crise else 0.115 
         g = 0.01; ke = rf + 0.06
 
         if tipo == "FII":
-            if vpa > 0: modelos['VPA'] = vpa
+            if vpa > 0: modelos['VPA (Justo)'] = vpa
             if div > 0: modelos['Gordon'] = div / (rf - g + 0.02)
             if div > 0: modelos['Bazin'] = div / 0.06
             vals = [v for v in modelos.values() if v > 0]
@@ -118,7 +121,6 @@ class MotorAnalise:
             atual = float(c.iloc[-1])
 
             macro_score, macro_txt = self.analisar_macro()
-            # News: simplificado no scanner, detalhado no individual
             sentimento = "⚪ Neutro" 
             
             dy_val = self.consultar_dividendos_reais(ticker_obj)
@@ -131,13 +133,16 @@ class MotorAnalise:
             
             # Score Inteligente
             score = 50; motivos = []
+            
+            # Critério P/VP (Aparece para todos, mas pesa diferente)
+            if 0 < pvp <= 1.00: score += 20; motivos.append("💎 Abaixo do Valor Patrimonial")
+            elif pvp > 1.50: score -= 20; motivos.append("💸 P/VP Muito Alto")
+
             if tipo_ativo == "FII":
-                if 0.80 <= pvp <= 1.05: score += 30; motivos.append("✅ P/VP Atrativo")
-                elif pvp > 1.15: score -= 30; motivos.append("❌ P/VP Caro")
+                if 0.85 <= pvp <= 1.05: score += 20; motivos.append("✅ P/VP Justo")
                 if (dy_val/atual) > 0.10: score += 20; motivos.append("💰 DY > 10%")
             else:
-                if p_justo > 0 and atual <= p_teto: score += 30; motivos.append("💎 Barato")
-                elif p_justo > 0 and atual > p_justo: score -= 20; motivos.append("💸 Caro")
+                if p_justo > 0 and atual <= p_teto: score += 30; motivos.append("📉 Desconto Valuation")
                 if mme9 > mme21: score += 15; motivos.append("📈 Tend. Alta")
 
             score += macro_score
@@ -145,16 +150,17 @@ class MotorAnalise:
             dy_pct = (dy_val/atual)*100 if atual > 0 else 0
             
             tec_data = [
-                {"Ind": "P/VP", "Val": f"{pvp:.2f}", "Sinal": "🟢" if pvp <= 1.05 else "🔴"},
-                {"Ind": "Macro", "Val": macro_txt, "Sinal": "🟢" if macro_score > 0 else "🔴"},
-                {"Ind": "DY 12m", "Val": f"{dy_pct:.1f}%", "Sinal": "ℹ️"}
+                {"Ind": "P/VP (V/VP)", "Val": f"{pvp:.2f}x", "Sinal": "🟢" if pvp <= 1.05 else "🔴"},
+                {"Ind": "DY Anual", "Val": f"{dy_pct:.2f}%", "Sinal": "🟢" if dy_pct > 6 else "⚪"},
+                {"Ind": "Macro", "Val": macro_txt, "Sinal": "🟢" if macro_score > 0 else "🔴"}
             ]
 
             return {
                 "score_ia": max(0, min(100, score)), "decisao_ia": decisao, "motivos": ", ".join(motivos),
                 "preco": atual, "p_justo": p_justo, "p_teto": p_teto,
                 "modelos_val": modelos, "dados_fund": dados, "dy_pct": dy_pct,
-                "tabela_tecnica": pd.DataFrame(tec_data), "manchetes": [], "sentimento": sentimento, "tipo": tipo_ativo
+                "tabela_tecnica": pd.DataFrame(tec_data), "manchetes": [], "sentimento": sentimento, "tipo": tipo_ativo,
+                "pvp": pvp
             }
         except: return None
 
@@ -183,7 +189,7 @@ class MotorAnalise:
 
 # --- 4. CACHE ---
 @st.cache_data(ttl=600)
-def obter_dados_v173(ticker, modo_crise):
+def obter_dados_v174(ticker, modo_crise):
     motor = MotorAnalise()
     t = motor.formatar_ticker(ticker)
     try:
@@ -196,12 +202,11 @@ def obter_dados_v173(ticker, modo_crise):
     except: return None
 
 @st.cache_data(ttl=3600)
-def calcular_consolidado_v173(df_dict):
+def calcular_consolidado_v174(df_dict):
     df = pd.DataFrame(df_dict)
     motor = MotorAnalise()
     tickers = [motor.formatar_ticker(t) for t in df["Ticker"]]
     vals = []; precos = []
-    # Sequencial seguro
     for _, r in df.iterrows():
         try:
             t = motor.formatar_ticker(r["Ticker"])
@@ -219,14 +224,13 @@ def download_longo(tickers):
     return yf.download(l, period="5y", progress=False, threads=False)['Close']
 
 # --- 5. INTERFACE ---
-st.title("💰 Hedge Fund Ricardo v173 (Grand Master)")
+st.title("💰 Hedge Fund Ricardo v174")
 
 with st.sidebar:
     st.header("⚙️ Painel")
     modo_crise = st.toggle("🔴 MODO CRISE", value=False)
     st.divider()
     if st.button("🔄 Restaurar Carteira"):
-        # Restaurado com Meta %
         st.session_state.carteira_acoes = pd.DataFrame([
             ["HGLG11", 20, 15], ["KNCR11", 27, 15],
             ["VALE3", 100, 20], ["PETR4", 200, 20], ["BBAS3", 100, 15], ["ITUB4", 100, 15]
@@ -246,7 +250,7 @@ tabs = st.tabs(["📊 Dash", "⚖️ Rebalance", "🔎 Análise", "📡 Scanner"
 with tabs[0]:
     if st.button("🚀 Atualizar Dados", type="primary"):
         with st.spinner("Atualizando preços (Sequencial)..."):
-            vals, precos = calcular_consolidado_v173(st.session_state.carteira_acoes.to_dict())
+            vals, precos = calcular_consolidado_v174(st.session_state.carteira_acoes.to_dict())
             st.session_state.carteira_acoes["Valor Atual"] = vals
             st.session_state.carteira_acoes["Preço"] = precos
             st.session_state.last_update = time.time()
@@ -263,17 +267,16 @@ with tabs[0]:
         if rv > 0: st.plotly_chart(px.pie(df, values='Valor Atual', names='Ticker', hole=0.4), use_container_width=True)
     else: st.info("Clique no botão acima para carregar.")
 
-# REBALANCE (RESTAURADO)
+# REBALANCE
 with tabs[1]:
     st.subheader("⚖️ Alocação Inteligente")
-    st.info("Defina a 'Meta %' na tabela abaixo. A soma deve ser 100%.")
+    st.info("Defina a 'Meta %' na tabela abaixo.")
     st.session_state.carteira_acoes = st.data_editor(st.session_state.carteira_acoes, num_rows="dynamic", use_container_width=True)
     
     if "last_update" in st.session_state:
         motor = MotorAnalise()
         df_bal = motor.rebalancear(st.session_state.carteira_acoes.copy())
-        st.write("#### Plano de Ajuste:")
-        cols = ["Ticker", "Valor Atual", "Meta R$", "Diff R$", "Sugestão", "Qtd Ação"]
+        cols = ["Ticker", "Meta %", "Valor Atual", "Diff R$", "Sugestão", "Qtd Ação"]
         st.dataframe(df_bal[cols].style.format({
             "Valor Atual": "R$ {:.2f}", "Meta R$": "R$ {:.2f}", "Diff R$": "R$ {:.2f}", "Qtd Ação": "{:.0f}"
         }).applymap(lambda v: 'color: green' if v == '🟢 COMPRAR' else 'color: red' if v == '🔴 VENDER' else '', subset=['Sugestão']), use_container_width=True)
@@ -284,57 +287,57 @@ with tabs[2]:
     t_in = c_in.text_input("Ticker", "VALE3")
     if c_bt.button("Analisar"):
         with st.spinner("Analisando..."):
-            r = obter_dados_v173(t_in, modo_crise)
+            r = obter_dados_v174(t_in, modo_crise)
         if r:
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Score", r['score_ia'], r['decisao_ia'])
             c2.metric("Preço Justo", f"R$ {r['p_justo']:.2f}")
-            c3.metric("DY (12m)", f"{r['dy_pct']:.2f}%")
-            if r['tipo'] == "FII": c4.metric("P/VP", f"{r['dados_fund']['P/VP']:.2f}")
-            else: c4.metric("Potencial", f"{((r['p_justo']/r['preco'])-1)*100:.1f}%")
+            
+            # --- CORREÇÃO AQUI: % GRANDE, R$ PEQUENO ---
+            c3.metric("DY (12m)", f"{r['dy_pct']:.2f}%", f"R$ {r['dados_fund']['DY 12m']:.2f}")
+            
+            # --- P/VP SEMPRE VISÍVEL ---
+            c4.metric("P/VP", f"{r['pvp']:.2f}x")
             
             st.success(f"**Tese:** {r['motivos']}")
             t_fmt = t_in.upper().replace(".SA", "")
             components.html(f"""<div class="tradingview-widget-container"><div id="tradingview_chart"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{ "width": "100%", "height": 400, "symbol": "BMFBOVESPA:{t_fmt}", "interval": "D", "timezone": "America/Sao_Paulo", "theme": "light", "style": "1", "locale": "br", "toolbar_bg": "#f1f3f6", "enable_publishing": false, "allow_symbol_change": true, "container_id": "tradingview_chart" }});</script></div>""", height=400)
+            
             st.dataframe(r['tabela_tecnica'], use_container_width=True, hide_index=True)
             st.write("#### Valuation:")
             for k, v in r['modelos_val'].items(): st.write(f"- **{k}:** R$ {v:.2f}")
 
-# SCANNER COMPLETO
+# SCANNER
 with tabs[3]:
     st.subheader("📡 Radar de Mercado")
-    col_scan1, col_scan2 = st.columns(2)
-    with col_scan1:
-        if st.button("🔍 Top 30 Ações (IBOV)"):
-            acoes = ["VALE3", "PETR4", "ITUB4", "BBDC4", "BBAS3", "ELET3", "WEGE3", "RENT3", "SUZB3", "BPAC11", 
-                     "JBSS3", "RADL3", "PRIO3", "RDOR3", "RAIL3", "CSAN3", "CPLE6", "VIVT3", "HYPE3", "EQTL3", 
-                     "SABESP3", "CMIG4", "LREN3", "B3SA3", "TIMS3", "TOTS3", "EGIE3", "VBBR3", "CCRO3", "CSNA3"]
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("🔍 Ações (IBOV)"):
+            acoes = ["VALE3", "PETR4", "ITUB4", "BBDC4", "BBAS3", "ELET3", "WEGE3", "RENT3", "SUZB3", "BPAC11"]
             res = []; bar = st.progress(0); status = st.empty()
             for i, t in enumerate(acoes):
                 status.text(f"Lendo {t}...")
-                d = obter_dados_v173(t, modo_crise)
-                if d: res.append({"Ticker": t, "Score": d['score_ia'], "Decisão": d['decisao_ia'], "Preço": d['preco'], "Justo": d['p_justo'], "DY%": f"{d['dy_pct']:.1f}%"})
+                d = obter_dados_v174(t, modo_crise)
+                if d: res.append({"Ticker": t, "Score": d['score_ia'], "Decisão": d['decisao_ia'], "Preço": d['preco'], "P/VP": f"{d['pvp']:.2f}", "DY%": f"{d['dy_pct']:.1f}%"})
                 bar.progress((i+1)/len(acoes))
             status.empty()
             if res: st.dataframe(pd.DataFrame(res).sort_values("Score", ascending=False).style.background_gradient(subset=['Score'], cmap='RdYlGn'), use_container_width=True)
 
-    with col_scan2:
-        if st.button("🏢 Top 30 FIIs (IFIX)"):
-            fiis = ["HGLG11", "KNCR11", "KNIP11", "MXRF11", "XPLG11", "XPML11", "VISC11", "BTLG11", "IRDM11", "CPTS11", 
-                    "BRCO11", "HGRU11", "MCCI11", "HGBS11", "HFOF11", "BCFF11", "KNSC11", "TRXF11", "VILG11", "VINC11", 
-                    "JSRE11", "RBRR11", "TGAR11", "MALL11", "RBRP11", "PVBI11", "LVBI11", "HGRE11", "SARE11", "RECR11"]
+    with c2:
+        if st.button("🏢 FIIs (IFIX)"):
+            fiis = ["HGLG11", "KNCR11", "KNIP11", "MXRF11", "XPLG11", "XPML11", "VISC11", "BTLG11", "IRDM11", "CPTS11"]
             res = []; bar = st.progress(0); status = st.empty()
             for i, t in enumerate(fiis):
                 status.text(f"Lendo {t}...")
-                d = obter_dados_v173(t, modo_crise)
-                if d: res.append({"Ticker": t, "Score": d['score_ia'], "Decisão": d['decisao_ia'], "Preço": d['preco'], "P/VP": f"{d['dados_fund']['P/VP']:.2f}", "DY%": f"{d['dy_pct']:.1f}%"})
+                d = obter_dados_v174(t, modo_crise)
+                if d: res.append({"Ticker": t, "Score": d['score_ia'], "Decisão": d['decisao_ia'], "Preço": d['preco'], "P/VP": f"{d['pvp']:.2f}", "DY%": f"{d['dy_pct']:.1f}%"})
                 bar.progress((i+1)/len(fiis))
             status.empty()
             if res: st.dataframe(pd.DataFrame(res).sort_values("Score", ascending=False).style.background_gradient(subset=['Score'], cmap='RdYlGn'), use_container_width=True)
 
 # FISCAL
 with tabs[4]:
-    st.subheader("🦁 Calculadora DARF")
+    st.subheader("🦁 DARF")
     c1, c2 = st.columns(2)
     with c1: tipo = st.radio("Operação", ["Swing Trade Ações", "FIIs", "Day Trade"])
     with c2: lucro = st.number_input("Lucro Líquido (R$)", 0.0); vendas = st.number_input("Total Vendas (Só Swing)", 0.0)
@@ -346,13 +349,13 @@ with tabs[4]:
     else:
         darf = lucro * 0.20; st.error(f"Pagar: R$ {darf:.2f}")
 
-# RENDA FIXA & STRESS
+# RESTO
 with tabs[5]: st.session_state.carteira_rf = st.data_editor(st.session_state.carteira_rf, num_rows="dynamic", use_container_width=True)
 with tabs[6]:
     if st.button("Stress Test"):
         motor = MotorAnalise(); total = {}
         for i, row in st.session_state.carteira_acoes.iterrows():
-            d = obter_dados_v173(row["Ticker"], False)
+            d = obter_dados_v174(row["Ticker"], False)
             if d:
                 res = motor.calcular_stress_test(row["Ticker"], row["Qtd"], d['preco'])
                 for k, v in res.items(): total[k] = total.get(k, 0) + v
