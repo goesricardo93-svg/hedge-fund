@@ -1,5 +1,5 @@
 # ==============================================================================
-# HEDGE FUND RICARDO V174 - VISUAL TUNING (DY% & P/VP FIXED)
+# HEDGE FUND RICARDO V175 - 10 ABAS RESTAURADAS & CORREÇÃO P/VP
 # ==============================================================================
 import streamlit as st
 import pandas as pd
@@ -11,9 +11,9 @@ import streamlit.components.v1 as components
 
 # --- 1. CONFIGURAÇÃO VISUAL ---
 st.set_page_config(
-    page_title="Hedge Fund Ricardo v174", 
+    page_title="Hedge Fund Ricardo v175", 
     layout="wide", 
-    page_icon="💎",
+    page_icon="🏦",
     initial_sidebar_state="expanded"
 )
 
@@ -35,7 +35,6 @@ class MotorAnalise:
 
     def detectar_tipo(self, ticker):
         t = ticker.replace(".SA", "")
-        # Lista de exceções (Units/Ações com final 11)
         fake_fiis = ["TAEE11", "KLBN11", "SAPR11", "SANB11", "ALUP11", "BBSE3", "CXSE3", "ITUB4", "VALE3", "PETR4", "ELET3", "WEGE3", "PRIO3", "RRRP3", "JBSS3", "BBAS3"]
         if t.endswith("11") and t not in fake_fiis: return "FII"
         return "ACAO"
@@ -43,7 +42,6 @@ class MotorAnalise:
     # [MÓDULOS DE ANÁLISE]
     def analisar_macro(self):
         try:
-            # threads=False para não travar
             ibov = yf.download("^BVSP", period="1y", progress=False, threads=False)['Close']
             if ibov.empty: return 0, "Neutro"
             atual = ibov.iloc[-1]
@@ -86,8 +84,11 @@ class MotorAnalise:
         roe = info.get('returnOnEquity', 0) or 0
         div = dy_val if dy_val > 0 else (info.get('dividendRate', 0) or 0)
         
-        # CÁLCULO DO P/VP (Agora garantido)
-        pvp = preco / vpa if vpa > 0 else 0
+        # --- CORREÇÃO DO P/VP ---
+        # Tenta pegar pronto. Se não vier, calcula.
+        pvp = info.get('priceToBook')
+        if pvp is None:
+            pvp = (preco / vpa) if vpa > 0 else 0.0
         
         rf = 0.135 if modo_crise else 0.115 
         g = 0.01; ke = rf + 0.06
@@ -121,7 +122,7 @@ class MotorAnalise:
             atual = float(c.iloc[-1])
 
             macro_score, macro_txt = self.analisar_macro()
-            sentimento = "⚪ Neutro" 
+            sentimento = "⚪ Neutro"
             
             dy_val = self.consultar_dividendos_reais(ticker_obj)
             p_justo, p_teto, modelos, dados = self.calcular_valuation(info, atual, ticker, modo_crise, dy_val)
@@ -134,15 +135,15 @@ class MotorAnalise:
             # Score Inteligente
             score = 50; motivos = []
             
-            # Critério P/VP (Aparece para todos, mas pesa diferente)
-            if 0 < pvp <= 1.00: score += 20; motivos.append("💎 Abaixo do Valor Patrimonial")
-            elif pvp > 1.50: score -= 20; motivos.append("💸 P/VP Muito Alto")
+            # P/VP Check
+            if 0.01 < pvp <= 1.00: score += 20; motivos.append("💎 P/VP Descontado")
+            elif pvp > 1.50: score -= 20; motivos.append("💸 P/VP Alto")
 
             if tipo_ativo == "FII":
-                if 0.85 <= pvp <= 1.05: score += 20; motivos.append("✅ P/VP Justo")
+                if 0.85 <= pvp <= 1.05: score += 20; motivos.append("✅ Valor Justo")
                 if (dy_val/atual) > 0.10: score += 20; motivos.append("💰 DY > 10%")
             else:
-                if p_justo > 0 and atual <= p_teto: score += 30; motivos.append("📉 Desconto Valuation")
+                if p_justo > 0 and atual <= p_teto: score += 30; motivos.append("📉 Barato (Valuation)")
                 if mme9 > mme21: score += 15; motivos.append("📈 Tend. Alta")
 
             score += macro_score
@@ -150,7 +151,7 @@ class MotorAnalise:
             dy_pct = (dy_val/atual)*100 if atual > 0 else 0
             
             tec_data = [
-                {"Ind": "P/VP (V/VP)", "Val": f"{pvp:.2f}x", "Sinal": "🟢" if pvp <= 1.05 else "🔴"},
+                {"Ind": "P/VP", "Val": f"{pvp:.2f}x", "Sinal": "🟢" if pvp <= 1.05 else "🔴"},
                 {"Ind": "DY Anual", "Val": f"{dy_pct:.2f}%", "Sinal": "🟢" if dy_pct > 6 else "⚪"},
                 {"Ind": "Macro", "Val": macro_txt, "Sinal": "🟢" if macro_score > 0 else "🔴"}
             ]
@@ -168,16 +169,14 @@ class MotorAnalise:
     def rebalancear(self, df_carteira):
         total = df_carteira["Valor Atual"].sum()
         if total == 0: return df_carteira
-        
         df_carteira["Meta R$"] = (df_carteira["Meta %"] / 100) * total
         df_carteira["Diff R$"] = df_carteira["Meta R$"] - df_carteira["Valor Atual"]
         df_carteira["Sugestão"] = np.where(df_carteira["Diff R$"] > 0, "🟢 COMPRAR", "🔴 VENDER")
-        
         mask = df_carteira["Preço"] > 0
         df_carteira.loc[mask, "Qtd Ação"] = (abs(df_carteira.loc[mask, "Diff R$"]) / df_carteira.loc[mask, "Preço"]).astype(int)
-        
         return df_carteira
 
+    # [MÓDULO STRESS & MONTE CARLO]
     def calcular_stress_test(self, ticker, qtd, preco):
         try:
             exp = qtd * preco
@@ -187,9 +186,23 @@ class MotorAnalise:
             }
         except: return {}
 
+    def monte_carlo(self, retornos, val_ini, sims=1000):
+        try:
+            days = 252 * 5
+            r_mean = retornos.mean(); r_std = retornos.std()
+            sim_returns = np.random.normal(r_mean, r_std, (days, sims))
+            res = val_ini * (1 + sim_returns).cumprod(axis=0)
+            df = pd.DataFrame(res)
+            return pd.DataFrame({
+                "Cenário Médio": df.mean(axis=1),
+                "Otimista (95%)": df.quantile(0.95, axis=1),
+                "Pessimista (5%)": df.quantile(0.05, axis=1)
+            })
+        except: return pd.DataFrame()
+
 # --- 4. CACHE ---
 @st.cache_data(ttl=600)
-def obter_dados_v174(ticker, modo_crise):
+def obter_dados_v175(ticker, modo_crise):
     motor = MotorAnalise()
     t = motor.formatar_ticker(ticker)
     try:
@@ -202,7 +215,7 @@ def obter_dados_v174(ticker, modo_crise):
     except: return None
 
 @st.cache_data(ttl=3600)
-def calcular_consolidado_v174(df_dict):
+def calcular_consolidado_v175(df_dict):
     df = pd.DataFrame(df_dict)
     motor = MotorAnalise()
     tickers = [motor.formatar_ticker(t) for t in df["Ticker"]]
@@ -224,7 +237,7 @@ def download_longo(tickers):
     return yf.download(l, period="5y", progress=False, threads=False)['Close']
 
 # --- 5. INTERFACE ---
-st.title("💰 Hedge Fund Ricardo v174")
+st.title("💰 Hedge Fund Ricardo v175")
 
 with st.sidebar:
     st.header("⚙️ Painel")
@@ -244,13 +257,14 @@ if "carteira_acoes" not in st.session_state:
 if "carteira_rf" not in st.session_state:
     st.session_state.carteira_rf = pd.DataFrame([["CDB", 0.0]], columns=["Ativo", "Saldo"])
 
-tabs = st.tabs(["📊 Dash", "⚖️ Rebalance", "🔎 Análise", "📡 Scanner", "🦁 Fiscal", "🛡️ Renda Fixa", "🧪 Stress"])
+# TODAS AS ABAS
+tabs = st.tabs(["📊 Dash", "⚖️ Rebalance", "🔎 Análise", "🔗 Matriz", "📡 Scanner", "🧪 Stress", "🔮 Futuro", "🛡️ Renda Fixa", "🦁 Fiscal", "⚡ Opções"])
 
 # DASHBOARD
 with tabs[0]:
     if st.button("🚀 Atualizar Dados", type="primary"):
         with st.spinner("Atualizando preços (Sequencial)..."):
-            vals, precos = calcular_consolidado_v174(st.session_state.carteira_acoes.to_dict())
+            vals, precos = calcular_consolidado_v175(st.session_state.carteira_acoes.to_dict())
             st.session_state.carteira_acoes["Valor Atual"] = vals
             st.session_state.carteira_acoes["Preço"] = precos
             st.session_state.last_update = time.time()
@@ -270,16 +284,13 @@ with tabs[0]:
 # REBALANCE
 with tabs[1]:
     st.subheader("⚖️ Alocação Inteligente")
-    st.info("Defina a 'Meta %' na tabela abaixo.")
     st.session_state.carteira_acoes = st.data_editor(st.session_state.carteira_acoes, num_rows="dynamic", use_container_width=True)
-    
     if "last_update" in st.session_state:
         motor = MotorAnalise()
         df_bal = motor.rebalancear(st.session_state.carteira_acoes.copy())
         cols = ["Ticker", "Meta %", "Valor Atual", "Diff R$", "Sugestão", "Qtd Ação"]
-        st.dataframe(df_bal[cols].style.format({
-            "Valor Atual": "R$ {:.2f}", "Meta R$": "R$ {:.2f}", "Diff R$": "R$ {:.2f}", "Qtd Ação": "{:.0f}"
-        }).applymap(lambda v: 'color: green' if v == '🟢 COMPRAR' else 'color: red' if v == '🔴 VENDER' else '', subset=['Sugestão']), use_container_width=True)
+        st.dataframe(df_bal[cols].style.format({"Valor Atual": "R$ {:.2f}", "Diff R$": "R$ {:.2f}", "Qtd Ação": "{:.0f}"})
+                     .applymap(lambda v: 'color: green' if v == '🟢 COMPRAR' else 'color: red' if v == '🔴 VENDER' else '', subset=['Sugestão']), use_container_width=True)
 
 # ANÁLISE
 with tabs[2]:
@@ -287,16 +298,12 @@ with tabs[2]:
     t_in = c_in.text_input("Ticker", "VALE3")
     if c_bt.button("Analisar"):
         with st.spinner("Analisando..."):
-            r = obter_dados_v174(t_in, modo_crise)
+            r = obter_dados_v175(t_in, modo_crise)
         if r:
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Score", r['score_ia'], r['decisao_ia'])
             c2.metric("Preço Justo", f"R$ {r['p_justo']:.2f}")
-            
-            # --- CORREÇÃO AQUI: % GRANDE, R$ PEQUENO ---
             c3.metric("DY (12m)", f"{r['dy_pct']:.2f}%", f"R$ {r['dados_fund']['DY 12m']:.2f}")
-            
-            # --- P/VP SEMPRE VISÍVEL ---
             c4.metric("P/VP", f"{r['pvp']:.2f}x")
             
             st.success(f"**Tese:** {r['motivos']}")
@@ -307,8 +314,15 @@ with tabs[2]:
             st.write("#### Valuation:")
             for k, v in r['modelos_val'].items(): st.write(f"- **{k}:** R$ {v:.2f}")
 
-# SCANNER
+# MATRIZ
 with tabs[3]:
+    if st.button("Gerar Matriz"):
+        ts = st.session_state.carteira_acoes["Ticker"].tolist()
+        h = download_longo(ts)
+        st.plotly_chart(px.imshow(h.corr(), text_auto=True, color_continuous_scale="RdBu_r"), use_container_width=True)
+
+# SCANNER
+with tabs[4]:
     st.subheader("📡 Radar de Mercado")
     c1, c2 = st.columns(2)
     with c1:
@@ -317,7 +331,7 @@ with tabs[3]:
             res = []; bar = st.progress(0); status = st.empty()
             for i, t in enumerate(acoes):
                 status.text(f"Lendo {t}...")
-                d = obter_dados_v174(t, modo_crise)
+                d = obter_dados_v175(t, modo_crise)
                 if d: res.append({"Ticker": t, "Score": d['score_ia'], "Decisão": d['decisao_ia'], "Preço": d['preco'], "P/VP": f"{d['pvp']:.2f}", "DY%": f"{d['dy_pct']:.1f}%"})
                 bar.progress((i+1)/len(acoes))
             status.empty()
@@ -329,14 +343,39 @@ with tabs[3]:
             res = []; bar = st.progress(0); status = st.empty()
             for i, t in enumerate(fiis):
                 status.text(f"Lendo {t}...")
-                d = obter_dados_v174(t, modo_crise)
+                d = obter_dados_v175(t, modo_crise)
                 if d: res.append({"Ticker": t, "Score": d['score_ia'], "Decisão": d['decisao_ia'], "Preço": d['preco'], "P/VP": f"{d['pvp']:.2f}", "DY%": f"{d['dy_pct']:.1f}%"})
                 bar.progress((i+1)/len(fiis))
             status.empty()
             if res: st.dataframe(pd.DataFrame(res).sort_values("Score", ascending=False).style.background_gradient(subset=['Score'], cmap='RdYlGn'), use_container_width=True)
 
+# STRESS
+with tabs[5]:
+    if st.button("Stress Test"):
+        motor = MotorAnalise(); total = {}
+        for i, row in st.session_state.carteira_acoes.iterrows():
+            d = obter_dados_v175(row["Ticker"], False)
+            if d:
+                res = motor.calcular_stress_test(row["Ticker"], row["Qtd"], d['preco'])
+                for k, v in res.items(): total[k] = total.get(k, 0) + v
+        for k, v in total.items(): st.metric(k, f"R$ {v:,.2f}", delta_color="inverse")
+
+# FUTURO
+with tabs[6]:
+    if st.button("Simular Monte Carlo"):
+        ts = st.session_state.carteira_acoes["Ticker"].tolist()
+        h = download_longo(ts)
+        if not h.empty:
+            ret = h.pct_change().dropna().mean(axis=1)
+            motor = MotorAnalise()
+            sim = motor.monte_carlo(ret, 100000, 500)
+            st.line_chart(sim)
+
+# RENDA FIXA
+with tabs[7]: st.session_state.carteira_rf = st.data_editor(st.session_state.carteira_rf, num_rows="dynamic", use_container_width=True)
+
 # FISCAL
-with tabs[4]:
+with tabs[8]:
     st.subheader("🦁 DARF")
     c1, c2 = st.columns(2)
     with c1: tipo = st.radio("Operação", ["Swing Trade Ações", "FIIs", "Day Trade"])
@@ -349,14 +388,13 @@ with tabs[4]:
     else:
         darf = lucro * 0.20; st.error(f"Pagar: R$ {darf:.2f}")
 
-# RESTO
-with tabs[5]: st.session_state.carteira_rf = st.data_editor(st.session_state.carteira_rf, num_rows="dynamic", use_container_width=True)
-with tabs[6]:
-    if st.button("Stress Test"):
-        motor = MotorAnalise(); total = {}
-        for i, row in st.session_state.carteira_acoes.iterrows():
-            d = obter_dados_v174(row["Ticker"], False)
-            if d:
-                res = motor.calcular_stress_test(row["Ticker"], row["Qtd"], d['preco'])
-                for k, v in res.items(): total[k] = total.get(k, 0) + v
-        for k, v in total.items(): st.metric(k, f"R$ {v:,.2f}", delta_color="inverse")
+# OPÇÕES
+with tabs[9]:
+    if norm:
+        c1, c2 = st.columns(2)
+        S = c1.number_input("Preço Ativo", 30.0); K = c2.number_input("Strike", 32.0)
+        if st.button("Calcular"):
+            d1 = (np.log(S/K) + (0.13 + 0.5*0.09)*0.08) / (0.3*np.sqrt(0.08))
+            call = S * norm.cdf(d1) - K * np.exp(-0.13*0.08) * norm.cdf(d1 - 0.3*np.sqrt(0.08))
+            st.metric("CALL", f"R$ {call:.2f}")
+    else: st.error("Scipy necessário.")
