@@ -1,5 +1,5 @@
 # ==============================================================================
-# HEDGE FUND RICARDO V175 - 10 ABAS RESTAURADAS & CORREÇÃO P/VP
+# HEDGE FUND RICARDO V180 - HEAVY DUTY (SEM CORTES)
 # ==============================================================================
 import streamlit as st
 import pandas as pd
@@ -11,9 +11,9 @@ import streamlit.components.v1 as components
 
 # --- 1. CONFIGURAÇÃO VISUAL ---
 st.set_page_config(
-    page_title="Hedge Fund Ricardo v175", 
+    page_title="Hedge Fund Ricardo v180", 
     layout="wide", 
-    page_icon="🏦",
+    page_icon="🦁",
     initial_sidebar_state="expanded"
 )
 
@@ -39,7 +39,7 @@ class MotorAnalise:
         if t.endswith("11") and t not in fake_fiis: return "FII"
         return "ACAO"
 
-    # [MÓDULOS DE ANÁLISE]
+    # --- MÓDULOS DE DADOS ---
     def analisar_macro(self):
         try:
             ibov = yf.download("^BVSP", period="1y", progress=False, threads=False)['Close']
@@ -50,23 +50,6 @@ class MotorAnalise:
             return -10, "🔴 Bear Market"
         except: return 0, "⚪ Indefinido"
 
-    def analisar_sentimento_news(self, ticker_obj):
-        try:
-            news = ticker_obj.news
-            if not news: return "Neutro", 0, ["Sem Notícias"]
-            score = 0
-            pos = ["lucro", "alta", "dividend", "compra", "recorde", "aprovado", "forte", "bonificação"]
-            neg = ["prejuízo", "queda", "fraude", "corrupção", "divida", "risco", "fraco", "investigação"]
-            manchetes = []
-            for n in news[:5]:
-                t = n.get('title', '').lower()
-                manchetes.append(n.get('title', ''))
-                score += sum(2 for w in pos if w in t)
-                score -= sum(2 for w in neg if w in t)
-            sentimento = "🟢 Positivo" if score > 2 else "🔴 Negativo" if score < -2 else "⚪ Neutro"
-            return sentimento, score, manchetes
-        except: return "Neutro", 0, ["Erro News"]
-
     def consultar_dividendos_reais(self, ticker_obj):
         try:
             divs = ticker_obj.dividends
@@ -75,28 +58,33 @@ class MotorAnalise:
             return divs[divs.index >= corte].sum()
         except: return 0.0
 
-    def calcular_valuation(self, info, preco, ticker, modo_crise, dy_val):
+    # --- CÁLCULO DE VALUATION E P/VP ROBUSTO ---
+    def calcular_fundamentos_completos(self, info, preco, ticker, modo_crise, dy_val):
         modelos = {}
         tipo = self.detectar_tipo(ticker)
         
+        # Coleta de Dados Brutos
         lpa = info.get('trailingEps', 0) or 0
-        vpa = info.get('bookValue', 0) or 0
+        vpa = info.get('bookValue', 0) or 0  # VPA CRUCIAL PARA O P/VP
         roe = info.get('returnOnEquity', 0) or 0
         div = dy_val if dy_val > 0 else (info.get('dividendRate', 0) or 0)
+        margem_liq = info.get('profitMargins', 0) or 0
+        divida_ebitda = info.get('debtToEquity', 0) or 0 # Aproximação se não tiver EBITDA direto
         
-        # --- CORREÇÃO DO P/VP ---
-        # Tenta pegar pronto. Se não vier, calcula.
-        pvp = info.get('priceToBook')
-        if pvp is None:
-            pvp = (preco / vpa) if vpa > 0 else 0.0
-        
+        # --- CORREÇÃO DO P/VP (CÁLCULO MANUAL) ---
+        if vpa and vpa > 0:
+            pvp = preco / vpa
+        else:
+            pvp = 0.0 # Se não tiver VPA, assume 0 (dado faltante)
+            
         rf = 0.135 if modo_crise else 0.115 
         g = 0.01; ke = rf + 0.06
 
+        # Lógica de Valuation
         if tipo == "FII":
-            if vpa > 0: modelos['VPA (Justo)'] = vpa
-            if div > 0: modelos['Gordon'] = div / (rf - g + 0.02)
-            if div > 0: modelos['Bazin'] = div / 0.06
+            if vpa > 0: modelos['VPA (Patrimonial)'] = vpa
+            if div > 0: modelos['Gordon (FII)'] = div / (rf - g + 0.02)
+            if div > 0: modelos['Bazin (6%)'] = div / 0.06
             vals = [v for v in modelos.values() if v > 0]
             p_justo = float(np.median(vals)) if vals else vpa
             fator_teto = 0.95 if modo_crise else 1.05
@@ -112,56 +100,95 @@ class MotorAnalise:
             margem = 0.25 if modo_crise else 0.15
             p_teto = p_justo * (1 - margem)
 
-        dados = {"LPA": lpa, "VPA": vpa, "ROE": roe, "DY 12m": div, "P/VP": pvp, "TIPO": tipo}
+        # Pacote de Fundamentos Completo
+        dados = {
+            "LPA": lpa, "VPA": vpa, "ROE": roe, "DY 12m": div, "P/VP": pvp, 
+            "Margem Líq.": margem_liq, "Dívida/Eq": divida_ebitda, "TIPO": tipo
+        }
         return p_justo, p_teto, modelos, dados
 
+    # --- ANÁLISE TÉCNICA EXPANDIDA ---
+    def calcular_tecnica_completa(self, hist):
+        c = hist["Close"]
+        atual = float(c.iloc[-1])
+        
+        # Médias
+        mme9 = c.ewm(span=9).mean().iloc[-1]
+        mme21 = c.ewm(span=21).mean().iloc[-1]
+        mm200 = c.rolling(200).mean().iloc[-1] if len(c) > 200 else atual
+        
+        # RSI (IFR)
+        delta = c.diff()
+        gain = delta.clip(lower=0).rolling(14).mean()
+        loss = -delta.clip(upper=0).rolling(14).mean()
+        rsi = 100 - (100/(1 + gain.iloc[-1]/loss.iloc[-1])) if loss.iloc[-1]!=0 else 50
+        
+        # Bandas de Bollinger
+        std = c.rolling(20).std().iloc[-1]
+        mm20 = c.rolling(20).mean().iloc[-1]
+        bb_sup = mm20 + (2 * std)
+        bb_inf = mm20 - (2 * std)
+        
+        return {
+            "MME9": mme9, "MME21": mme21, "MM200": mm200, "RSI": rsi,
+            "BB_Sup": bb_sup, "BB_Inf": bb_inf, "Preço": atual
+        }
+
+    # --- CORE DA ANÁLISE ---
     def analisar(self, hist, info, ticker, modo_crise, ticker_obj):
         try:
             if hist is None or hist.empty: return None
-            c = hist["Close"]
-            atual = float(c.iloc[-1])
-
+            
+            # Executa Módulos
             macro_score, macro_txt = self.analisar_macro()
-            sentimento = "⚪ Neutro"
-            
             dy_val = self.consultar_dividendos_reais(ticker_obj)
-            p_justo, p_teto, modelos, dados = self.calcular_valuation(info, atual, ticker, modo_crise, dy_val)
-            tipo_ativo = dados["TIPO"]
-            pvp = dados["P/VP"]
-
-            mme9 = c.ewm(span=9).mean().iloc[-1]
-            mme21 = c.ewm(span=21).mean().iloc[-1]
+            p_justo, p_teto, modelos, dados_fund = self.calcular_fundamentos_completos(info, float(hist["Close"].iloc[-1]), ticker, modo_crise, dy_val)
+            tecnica = self.calcular_tecnica_completa(hist)
             
-            # Score Inteligente
+            tipo_ativo = dados_fund["TIPO"]
+            pvp = dados_fund["P/VP"]
+            atual = tecnica["Preço"]
+
+            # --- SCORE SYSTEM ---
             score = 50; motivos = []
             
-            # P/VP Check
+            # 1. Valuation & P/VP
             if 0.01 < pvp <= 1.00: score += 20; motivos.append("💎 P/VP Descontado")
             elif pvp > 1.50: score -= 20; motivos.append("💸 P/VP Alto")
 
             if tipo_ativo == "FII":
-                if 0.85 <= pvp <= 1.05: score += 20; motivos.append("✅ Valor Justo")
+                if 0.85 <= pvp <= 1.05: score += 20; motivos.append("✅ Valor Justo (FII)")
                 if (dy_val/atual) > 0.10: score += 20; motivos.append("💰 DY > 10%")
             else:
                 if p_justo > 0 and atual <= p_teto: score += 30; motivos.append("📉 Barato (Valuation)")
-                if mme9 > mme21: score += 15; motivos.append("📈 Tend. Alta")
-
+                elif p_justo > 0 and atual > p_justo: score -= 15
+            
+            # 2. Técnica
+            if tecnica["MME9"] > tecnica["MME21"]: score += 15; motivos.append("📈 Tend. Alta (Curto)")
+            if atual > tecnica["MM200"]: score += 10; motivos.append("🐂 Tend. Alta (Longo)")
+            if tecnica["RSI"] < 30: score += 10; motivos.append("📉 Sobrevendido")
+            
+            # 3. Macro
             score += macro_score
+
             decisao = "🟢 COMPRA" if score >= 60 else "🔴 VENDA" if score <= 40 else "⚪ NEUTRO"
             dy_pct = (dy_val/atual)*100 if atual > 0 else 0
             
+            # Tabela Técnica Detalhada
             tec_data = [
-                {"Ind": "P/VP", "Val": f"{pvp:.2f}x", "Sinal": "🟢" if pvp <= 1.05 else "🔴"},
-                {"Ind": "DY Anual", "Val": f"{dy_pct:.2f}%", "Sinal": "🟢" if dy_pct > 6 else "⚪"},
-                {"Ind": "Macro", "Val": macro_txt, "Sinal": "🟢" if macro_score > 0 else "🔴"}
+                {"Indicador": "P/VP", "Valor": f"{pvp:.2f}x", "Sinal": "🟢" if pvp <= 1.05 else "🔴"},
+                {"Indicador": "RSI (14)", "Valor": f"{tecnica['RSI']:.0f}", "Sinal": "🟢" if tecnica['RSI'] < 30 else "⚪"},
+                {"Indicador": "MME 9 vs 21", "Valor": "Cruzamento", "Sinal": "🟢" if tecnica['MME9'] > tecnica['MME21'] else "🔴"},
+                {"Indicador": "Preço vs MM200", "Valor": f"R$ {tecnica['MM200']:.2f}", "Sinal": "🟢" if atual > tecnica['MM200'] else "🔴"},
+                {"Indicador": "Bollinger Inf", "Valor": f"R$ {tecnica['BB_Inf']:.2f}", "Sinal": "ℹ️"},
+                {"Indicador": "Macro", "Valor": macro_txt, "Sinal": "🟢" if macro_score > 0 else "🔴"}
             ]
 
             return {
                 "score_ia": max(0, min(100, score)), "decisao_ia": decisao, "motivos": ", ".join(motivos),
                 "preco": atual, "p_justo": p_justo, "p_teto": p_teto,
-                "modelos_val": modelos, "dados_fund": dados, "dy_pct": dy_pct,
-                "tabela_tecnica": pd.DataFrame(tec_data), "manchetes": [], "sentimento": sentimento, "tipo": tipo_ativo,
-                "pvp": pvp
+                "modelos_val": modelos, "dados_fund": dados_fund, "dy_pct": dy_pct,
+                "tabela_tecnica": pd.DataFrame(tec_data), "tipo": tipo_ativo, "pvp": pvp
             }
         except: return None
 
@@ -202,7 +229,7 @@ class MotorAnalise:
 
 # --- 4. CACHE ---
 @st.cache_data(ttl=600)
-def obter_dados_v175(ticker, modo_crise):
+def obter_dados_v180(ticker, modo_crise):
     motor = MotorAnalise()
     t = motor.formatar_ticker(ticker)
     try:
@@ -215,10 +242,9 @@ def obter_dados_v175(ticker, modo_crise):
     except: return None
 
 @st.cache_data(ttl=3600)
-def calcular_consolidado_v175(df_dict):
+def calcular_consolidado_v180(df_dict):
     df = pd.DataFrame(df_dict)
     motor = MotorAnalise()
-    tickers = [motor.formatar_ticker(t) for t in df["Ticker"]]
     vals = []; precos = []
     for _, r in df.iterrows():
         try:
@@ -237,7 +263,7 @@ def download_longo(tickers):
     return yf.download(l, period="5y", progress=False, threads=False)['Close']
 
 # --- 5. INTERFACE ---
-st.title("💰 Hedge Fund Ricardo v175")
+st.title("💰 Hedge Fund Ricardo v180 (Heavy Duty)")
 
 with st.sidebar:
     st.header("⚙️ Painel")
@@ -257,14 +283,14 @@ if "carteira_acoes" not in st.session_state:
 if "carteira_rf" not in st.session_state:
     st.session_state.carteira_rf = pd.DataFrame([["CDB", 0.0]], columns=["Ativo", "Saldo"])
 
-# TODAS AS ABAS
+# 10 ABAS COMPLETAS
 tabs = st.tabs(["📊 Dash", "⚖️ Rebalance", "🔎 Análise", "🔗 Matriz", "📡 Scanner", "🧪 Stress", "🔮 Futuro", "🛡️ Renda Fixa", "🦁 Fiscal", "⚡ Opções"])
 
 # DASHBOARD
 with tabs[0]:
     if st.button("🚀 Atualizar Dados", type="primary"):
         with st.spinner("Atualizando preços (Sequencial)..."):
-            vals, precos = calcular_consolidado_v175(st.session_state.carteira_acoes.to_dict())
+            vals, precos = calcular_consolidado_v180(st.session_state.carteira_acoes.to_dict())
             st.session_state.carteira_acoes["Valor Atual"] = vals
             st.session_state.carteira_acoes["Preço"] = precos
             st.session_state.last_update = time.time()
@@ -279,7 +305,7 @@ with tabs[0]:
         c2.metric("Renda Variável", f"R$ {rv:,.2f}")
         c3.metric("Renda Fixa", f"R$ {rf:,.2f}")
         if rv > 0: st.plotly_chart(px.pie(df, values='Valor Atual', names='Ticker', hole=0.4), use_container_width=True)
-    else: st.info("Clique no botão acima para carregar.")
+    else: st.info("Clique no botão acima.")
 
 # REBALANCE
 with tabs[1]:
@@ -292,27 +318,43 @@ with tabs[1]:
         st.dataframe(df_bal[cols].style.format({"Valor Atual": "R$ {:.2f}", "Diff R$": "R$ {:.2f}", "Qtd Ação": "{:.0f}"})
                      .applymap(lambda v: 'color: green' if v == '🟢 COMPRAR' else 'color: red' if v == '🔴 VENDER' else '', subset=['Sugestão']), use_container_width=True)
 
-# ANÁLISE
+# ANÁLISE (COMPLETA)
 with tabs[2]:
     c_in, c_bt = st.columns([3, 1])
     t_in = c_in.text_input("Ticker", "VALE3")
     if c_bt.button("Analisar"):
         with st.spinner("Analisando..."):
-            r = obter_dados_v175(t_in, modo_crise)
+            r = obter_dados_v180(t_in, modo_crise)
         if r:
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Score", r['score_ia'], r['decisao_ia'])
+            c1.metric("Score IA", r['score_ia'], r['decisao_ia'])
             c2.metric("Preço Justo", f"R$ {r['p_justo']:.2f}")
             c3.metric("DY (12m)", f"{r['dy_pct']:.2f}%", f"R$ {r['dados_fund']['DY 12m']:.2f}")
             c4.metric("P/VP", f"{r['pvp']:.2f}x")
             
-            st.success(f"**Tese:** {r['motivos']}")
+            st.success(f"**Tese ({r['tipo']}):** {r['motivos']}")
             t_fmt = t_in.upper().replace(".SA", "")
             components.html(f"""<div class="tradingview-widget-container"><div id="tradingview_chart"></div><script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script><script type="text/javascript">new TradingView.widget({{ "width": "100%", "height": 400, "symbol": "BMFBOVESPA:{t_fmt}", "interval": "D", "timezone": "America/Sao_Paulo", "theme": "light", "style": "1", "locale": "br", "toolbar_bg": "#f1f3f6", "enable_publishing": false, "allow_symbol_change": true, "container_id": "tradingview_chart" }});</script></div>""", height=400)
             
-            st.dataframe(r['tabela_tecnica'], use_container_width=True, hide_index=True)
-            st.write("#### Valuation:")
-            for k, v in r['modelos_val'].items(): st.write(f"- **{k}:** R$ {v:.2f}")
+            # BLOCOS DETALHADOS
+            col_tec, col_fund, col_val = st.columns(3)
+            with col_tec:
+                st.subheader("📊 Técnica")
+                st.dataframe(r['tabela_tecnica'], use_container_width=True, hide_index=True)
+            
+            with col_fund:
+                st.subheader("🏗️ Fundamentos")
+                d = r['dados_fund']
+                st.write(f"**VPA:** R$ {d.get('VPA',0):.2f}")
+                st.write(f"**LPA:** R$ {d.get('LPA',0):.2f}")
+                st.write(f"**ROE:** {d.get('ROE',0)*100:.1f}%")
+                st.write(f"**Margem Líq:** {d.get('Margem Líq.',0)*100:.1f}%")
+                st.write(f"**Dívida/Eq:** {d.get('Dívida/Eq',0):.2f}")
+
+            with col_val:
+                st.subheader("📐 Valuation")
+                for k, v in r['modelos_val'].items(): 
+                    st.metric(k, f"R$ {v:.2f}")
 
 # MATRIZ
 with tabs[3]:
@@ -321,32 +363,28 @@ with tabs[3]:
         h = download_longo(ts)
         st.plotly_chart(px.imshow(h.corr(), text_auto=True, color_continuous_scale="RdBu_r"), use_container_width=True)
 
-# SCANNER
+# SCANNER (Mantido Robusto)
 with tabs[4]:
     st.subheader("📡 Radar de Mercado")
     c1, c2 = st.columns(2)
     with c1:
         if st.button("🔍 Ações (IBOV)"):
             acoes = ["VALE3", "PETR4", "ITUB4", "BBDC4", "BBAS3", "ELET3", "WEGE3", "RENT3", "SUZB3", "BPAC11"]
-            res = []; bar = st.progress(0); status = st.empty()
+            res = []; bar = st.progress(0)
             for i, t in enumerate(acoes):
-                status.text(f"Lendo {t}...")
-                d = obter_dados_v175(t, modo_crise)
+                d = obter_dados_v180(t, modo_crise)
                 if d: res.append({"Ticker": t, "Score": d['score_ia'], "Decisão": d['decisao_ia'], "Preço": d['preco'], "P/VP": f"{d['pvp']:.2f}", "DY%": f"{d['dy_pct']:.1f}%"})
                 bar.progress((i+1)/len(acoes))
-            status.empty()
             if res: st.dataframe(pd.DataFrame(res).sort_values("Score", ascending=False).style.background_gradient(subset=['Score'], cmap='RdYlGn'), use_container_width=True)
 
     with c2:
         if st.button("🏢 FIIs (IFIX)"):
             fiis = ["HGLG11", "KNCR11", "KNIP11", "MXRF11", "XPLG11", "XPML11", "VISC11", "BTLG11", "IRDM11", "CPTS11"]
-            res = []; bar = st.progress(0); status = st.empty()
+            res = []; bar = st.progress(0)
             for i, t in enumerate(fiis):
-                status.text(f"Lendo {t}...")
-                d = obter_dados_v175(t, modo_crise)
+                d = obter_dados_v180(t, modo_crise)
                 if d: res.append({"Ticker": t, "Score": d['score_ia'], "Decisão": d['decisao_ia'], "Preço": d['preco'], "P/VP": f"{d['pvp']:.2f}", "DY%": f"{d['dy_pct']:.1f}%"})
                 bar.progress((i+1)/len(fiis))
-            status.empty()
             if res: st.dataframe(pd.DataFrame(res).sort_values("Score", ascending=False).style.background_gradient(subset=['Score'], cmap='RdYlGn'), use_container_width=True)
 
 # STRESS
@@ -354,7 +392,7 @@ with tabs[5]:
     if st.button("Stress Test"):
         motor = MotorAnalise(); total = {}
         for i, row in st.session_state.carteira_acoes.iterrows():
-            d = obter_dados_v175(row["Ticker"], False)
+            d = obter_dados_v180(row["Ticker"], False)
             if d:
                 res = motor.calcular_stress_test(row["Ticker"], row["Qtd"], d['preco'])
                 for k, v in res.items(): total[k] = total.get(k, 0) + v
@@ -380,13 +418,11 @@ with tabs[8]:
     c1, c2 = st.columns(2)
     with c1: tipo = st.radio("Operação", ["Swing Trade Ações", "FIIs", "Day Trade"])
     with c2: lucro = st.number_input("Lucro Líquido (R$)", 0.0); vendas = st.number_input("Total Vendas (Só Swing)", 0.0)
-    
     darf = 0.0
     if tipo == "Swing Trade Ações":
         if vendas > 20000: darf = lucro * 0.15; st.error(f"Pagar: R$ {darf:.2f}")
         else: st.success("ISENTO (< 20k)")
-    else:
-        darf = lucro * 0.20; st.error(f"Pagar: R$ {darf:.2f}")
+    else: darf = lucro * 0.20; st.error(f"Pagar: R$ {darf:.2f}")
 
 # OPÇÕES
 with tabs[9]:
